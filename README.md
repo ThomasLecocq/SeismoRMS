@@ -14,6 +14,8 @@ this should be easy to set up in a conda env: ``conda create -n covid python=3.7
 
 Author: Thomas Lecocq @seismotom
 
+Run it interactively on [mybinder.org](https://mybinder.org/v2/gh/ThomasLecocq/SeismoRMS/master)
+
 
 ## Example:
 The following data shows the effect of the Social Distancing measures from the
