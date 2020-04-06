@@ -12,7 +12,7 @@ Required:
 
 this should be easy to set up in a conda env: ``conda create -n covid python=3.7 obspy pandas jupyter notebook``
 
-Author: Thomas Lecocq @seismotom
+Author: Thomas Lecocq @seismotom, Fred Massin @fmassin
 
 Run it interactively on [mybinder.org](https://mybinder.org/v2/gh/ThomasLecocq/SeismoRMS/master)
 
