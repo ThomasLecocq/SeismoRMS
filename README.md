@@ -10,7 +10,7 @@ Required:
 - jupyter
 - notebook
 
-this should be easy to set up in a conda env: ``conda create -n covid python=3.7 obspy pandas jupyter notebook``
+this should be easy to set up in a conda env: ``conda create -c conda-forge -n covid python=3.7 obspy pandas jupyter notebook``
 
 Author: Thomas Lecocq @seismotom, Fred Massin @fmassin
 
