@@ -1,0 +1,5 @@
+*.mseed
+*.npz
+*.*.*.*.pdf
+*.*.*.*.png
+.ipynb_checkpoints
