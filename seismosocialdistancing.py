@@ -11,14 +11,27 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import matplotlib.patheffects as pe
 
+# For main plot
+import datetime
+
 
 class PSDs(object):
-    def __init__(self,count={},psd={},per={},times=[],mseedids=[]):
-        self.count=count
-        self.psd=psd
-        self.per=per
-        self.times=times
-        self.mseedids=mseedids
+    def __init__(self,
+                 count={},psd={},per={},times=[],mseedids=[],
+                 reloadme=None):
+        if reloadme is None:
+            self.count=count
+            self.psd=psd
+            self.per=per
+            self.times=times
+            self.mseedids=mseedids
+        else:
+            self.count=reloadme.count
+            self.psd=reloadme.psd
+            self.per=reloadme.per
+            self.times=reloadme.times
+            self.mseedids=reloadme.mseedids
+            
     def add(self,time,mseedid):
         if (mseedid,time) not in self.psd:
             self.count[(mseedid,time)]=[]
@@ -26,6 +39,38 @@ class PSDs(object):
             self.per[(mseedid,time)]=[]
             self.times+=[(mseedid,time)]
             self.mseedids+=[mseedid]
+    
+    def clientpqlx(self,
+                   sshuserhost='',
+                   freqs=[(0.1,1.0),
+                          (1.0,20.0),
+                          (4.0,14.0),
+                          (4.0,20.0)],
+                   **args):
+        pqlx2psds(sshuserhost,self=self,**args)
+        self.dRMS(freqs=freqs)
+        
+    def plot(self,
+             mode='timeseries',
+             **args):
+        plot(self.displacement_RMS,
+             mode=mode,
+             **args)
+             
+    def clockplot(self,
+                  mode='clockplots',
+                  **args):
+        plot(self.displacement_RMS,
+             mode=mode,
+             **args)
+           
+    def clockmap(self,
+                 mode='clockmaps',
+                 **args):
+        plot(self.displacement_RMS,
+             mode=mode,
+             **args)
+    
     def dRMS(self,
              freqs=[(0.1,1.0),
                     (1.0,20.0),
@@ -71,7 +116,7 @@ class PSDs(object):
                                                           index=index)
 
 
-def sqlx2drms(sshuserhost,
+def pqlx2psds(sshuserhost,
               network = 'CH',
               station = 'SGEV',
               location = '',
@@ -79,7 +124,9 @@ def sqlx2drms(sshuserhost,
               dbname = 'AllNetworks',
               start = UTCDateTime()-3*24*60*60,#"2020-03-07")
               end = UTCDateTime(),# means "now"
-              freqs = [(0.1,1.0),(1.0,20.0),(4.0,14.0),(4.0,20.0)]):
+              freqs = [(0.1,1.0),(1.0,20.0),(4.0,14.0),(4.0,20.0)],
+              blocksize = 31*24*2, # equivalent to 9 days 1 channel
+              self = None):
     """
     Get PSDs from PQLX
     
@@ -99,47 +146,46 @@ def sqlx2drms(sshuserhost,
 
     >>>myPSDs = sqlx2drms('login@hostname')
     """
-    psds=PSDs()
-    datesplit = pd.date_range(start.datetime, 
-                              end.datetime, 
-                              freq="9D")
-    #print(datesplit)
-    for date in datesplit:
-        if date>= end.datetime:
+    rflag=False
+    if self is None:
+        rflag=True
+        self=PSDs()
+    commands = []
+    datelist = pd.date_range(start.datetime,
+                             end.datetime,
+                             freq="30min")
+    for date1 in datelist:
+        date2 = date1+pd.Timedelta(minutes=30)
+        if date2 > end.datetime:
             break
-        ssh = subprocess.Popen(["ssh", 
-                                "-i .ssh/id_rsa", 
+        for n in network.split(','):
+            for s in station.split(','):
+                for l in location.split(','):
+                    for c in channel.split(','):
+                        mseedid = '.'.join([n,s,l,c])
+                        command = 'exPSDhour'
+                        command += ' AllNetworks'
+                        command += ' %s'%mseedid.replace('..','.--.').replace('.',' ')
+                        command += ' %s'%date1.strftime("%Y-%m-%d")
+                        command += ' %s'%date2.strftime("%Y-%m-%d")
+                        command += ' %s'%date1.strftime('%X')
+                        command += ' %s'%date2.strftime('%X')
+                        command += ' P | sed "s/$/\t%s\tmyprecious/"\n'%(mseedid)
+                        commands += [command]
+    
+    for c in range(0,len(commands),blocksize):
+        ssh = subprocess.Popen(["ssh",
+                                "-i .ssh/id_rsa",
                                 sshuserhost],#sys.argv[1]],
                                stdin =subprocess.PIPE,
                                stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE,
                                universal_newlines=True,
                                bufsize=0)
-         
-        datelist = pd.date_range(date, 
-                                 date+pd.Timedelta(9, unit='D'), 
-                                 freq="30min")
-        #print(datelist)
-        # Send ssh commands to stdin
-        for date1 in datelist:
-            if date1>= end.datetime:
-                break
-            date2 = date1+pd.Timedelta(minutes=30)
-            for n in network.split(','):
-                for s in station.split(','):
-                    for l in location.split(','):
-                        for c in channel.split(','):
-                            mseedid = '.'.join([n,s,l,c])
-                            command = 'exPSDhour'
-                            command += ' AllNetworks'
-                            command += ' %s'%mseedid.replace('..','.--.').replace('.',' ')
-                            command += ' %s'%date1.strftime("%Y-%m-%d")
-                            command += ' %s'%date2.strftime("%Y-%m-%d")
-                            command += ' %s'%date1.strftime('%X')
-                            command += ' %s'%date2.strftime('%X')
-                            command += ' P | sed "s/$/\t%s\tmyprecious/"\n'%(mseedid)
-                            #print(date1, date2)
-                            ssh.stdin.write(command)
+        stop = c+blocksize
+        stop = min([len(commands),stop])
+        for cc,command in enumerate(commands[c:stop]):
+            ssh.stdin.write(command)
         ssh.stdin.close()
 
         # Fetch output
@@ -152,15 +198,17 @@ def sqlx2drms(sshuserhost,
                     continue
                 mseedid = data[-1]
                 time = UTCDateTime('%s %s'%(data[0],data[1])).datetime
-                psds.add(time,mseedid)
-                psds.count[(mseedid,time)] += [1]
-                psds.psd[(mseedid,time)] += [float(data[3])]
-                psds.per[(mseedid,time)] += [float(data[2])]
-    return psds
+                self.add(time,mseedid)
+                self.count[(mseedid,time)] += [1]
+                self.psd[(mseedid,time)] += [float(data[3])]
+                self.per[(mseedid,time)] += [float(data[2])]
+    if rflag:
+        return self
     
 
 def hourmap(data,
-            bans=None,
+            bans = {"2020-03-13":'Groups >100 banned',
+                    "2020-03-20":'Groups >5 banned'},
             ax=None,
             scale = 1e9):
     """
@@ -201,7 +249,7 @@ def hourmap(data,
             #path_effects=[pe.withStroke(linewidth=2,foreground='w')]
             )
     ax.set_xticks(np.linspace(0,np.pi*2*23/24,24))
-    ax.set_xticklabels(['%dh'%h for h in range(24)])
+    ax.set_xticklabels(['%d h'%h for h in range(24)])
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
     ax.set_rmax(max(radii))
@@ -241,8 +289,171 @@ def hourmap(data,
     cb.ax.set_xlabel("Displacement (nm)")    
     
     ax.bar(theta[valid], radii[valid], 
-           color=s_m.to_rgba(data[valid]),
+           color=s_m.to_rgba(np.asarray([v for v in data])[valid]),
            bottom=radii[valid]-1,
            width=width)
     
     return ax
+
+
+days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday','Saturday','Sunday']
+# Just a bunch of helper functions
+def stack_wday_time(df):
+    """Takes a DateTimeIndex'ed DataFrame and returns the unstaked table: hours vs day name"""
+    return df.groupby(level=(0,1)).median().unstack(level=-1).T.droplevel(0)[days]*1e9
+
+def clock24_plot_commons(ax):
+    # Set the circumference labels
+    ax.set_xticks(np.linspace(0, 2*np.pi, 24, endpoint=False))
+    ax.set_xticklabels(["%i h"%i for i in range(24)], fontsize=8)
+    ax.set_yticklabels(["%i nm" % i for i in np.arange(0,100, 10)], fontsize=7)
+    ax.yaxis.set_tick_params(labelsize=8)
+
+    # Make the labels go clockwise
+    ax.set_theta_direction(-1)
+
+    # Place 0 at the top
+    ax.set_theta_offset(np.pi/2.0)
+    plt.xlabel("Hour (local time)", fontsize=10)
+    plt.grid(True)
+
+def radial_hours(N):
+    hours = np.deg2rad(np.linspace(0, 360, N-1, endpoint=False))
+    hours = np.append(hours, hours[0])
+    return hours
+
+def localize_tz_and_reindex(df, freq="15Min", time_zone = "Europe/Brussels"):
+    return df.copy().tz_localize("UTC").dropna().tz_convert(time_zone).tz_localize(None).resample(freq).mean().to_frame()
+    
+def plot(displacement_RMS,
+         band = "4.0-14.0",
+         logo = 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/44/Logo_SED_2014.png/220px-Logo_SED_2014.png',
+         bans = {"2020-03-20":'Groups >5 banned',
+                 "2020-03-13":'Groups >100 banned'},
+         mode = '*',
+         scale = 1e9,
+         time_zone = "Europe/Brussels",
+         ):
+    
+    for channelcode in list(set([k[:-1] for k in displacement_RMS])):
+        
+        
+        data={}
+        for o in 'ZEN':
+            if channelcode+o not in displacement_RMS :
+                continue
+            data[channelcode[-2:]+o] = displacement_RMS[channelcode+o][band]
+            main=channelcode[-2:]+o
+            
+        if len(data.keys())>1:
+            data[channelcode[-2:]+'*'] = data[main].copy().resample("30min").median().tshift(30, "min") # for the sum
+            main=channelcode[-2:]+'*'
+            for i,t in enumerate(data[main].index):
+                data[main][i] = 0
+            for o in data:
+                if o == main:
+                    continue
+                data[o] = data[o].copy().resample("30min" ).median().tshift(30, "min")
+                for i,t in enumerate(data[main].index):
+                    if len(data[o].index)-1<i:
+                        break
+                    if True:#abs(data[o].index[i].timestamp()-data[main].index[i].timestamp())<60:
+                        data[main][i] += data[o][i]**2
+            for i,t in enumerate(data[main].index):
+                data[main][i] = data[main][i]**.5
+        
+        if mode in ['*', 'all', 'clockmaps']:
+            ax = hourmap(data[main],
+                         bans=bans,
+                         scale=scale)
+            ax.set_title('Seismic Noise for %s - Filter: [%s] Hz' % (channelcode[:]+main[-1],band))
+            
+        if mode in ['*', 'all', 'timeseries']:
+            fig = plt.figure(figsize=(12,6))
+            if logo is not None:
+                fig.figimage(plt.imread(logo),
+                             40, 40, alpha=.4, zorder=1)
+            plt.plot(data[main].index, data[main], label = main)
+            
+            for o in data:
+                rs = data[o].copy().between_time("6:00", "16:00")
+                rs = rs.resample("1D" ).median().tshift(12, "H")
+                plt.plot(rs.index, rs,
+                         label="$\overline{%s}$ (6h-16h)"%o)#, c='purple')
+
+            
+
+            # Get normal business days and set their background color to green
+            db = pd.bdate_range(min(data[main].index),
+                                max(data[main].index))
+            for dbi in db:
+                plt.axvspan(dbi, dbi+datetime.timedelta(days=1),
+                            facecolor='lightgreen', edgecolor="none",
+                            alpha=0.2, zorder=-10)
+
+            plt.ylim(0,np.nanpercentile(data[main],95)*1.5)
+            plt.ylim(0,np.nanpercentile(data[main],95)*1.5)
+            ticks = ticker.FuncFormatter(lambda x, pos: "{0:g}".format(x*scale))
+            plt.gca().yaxis.set_major_formatter(ticks)
+            plt.ylabel("Displacement (nm)")
+
+            plt.title('Seismic Noise for %s - Filter: [%s] Hz' % (channelcode[:]+main[-1],
+                                                                  band))
+            plt.xlim(data[main].index.min(), data[main].index.max())
+            fig.autofmt_xdate()
+            plt.grid(True, zorder=-1)
+            plt.gca().set_axisbelow(True)
+            for iban,ban in enumerate(bans.keys()):
+                plt.axvline(UTCDateTime(ban).datetime,
+                            color='r',
+                            linewidth=2,
+                            linestyle=['-', '--', '-.', ':'][iban],
+                            path_effects=[pe.withStroke(linewidth=4, foreground="k")],
+                            zorder=-9,
+                            label=bans[ban])
+            plt.legend(loc='upper left', bbox_to_anchor=(1, 0.5))
+        
+        if mode in ['*', 'all', 'clockplots']:
+            data[main] = localize_tz_and_reindex(data[main], "30Min")
+            preloc = data[main].loc[:list(bans.keys())[0]]
+            preloc = preloc.set_index([preloc.index.day_name(), preloc.index.hour+preloc.index.minute/60.])
+            postloc = data[main].loc[list(bans.keys())[0]:]
+            postloc = postloc.set_index([postloc.index.day_name(), postloc.index.hour+postloc.index.minute/60.])
+            
+            cmap = plt.get_cmap("tab20")
+            
+            ax = stack_wday_time(preloc).plot(figsize=(14,8), cmap = cmap)
+            stack_wday_time(postloc).plot(ls="--", ax=ax, legend=False,cmap = cmap)
+            
+            plt.title("Daily Noise Levels in %s" % (channelcode[:]+main[-1]))
+            plt.ylabel("Amplitude (nm)")
+            plt.xlabel("Hour of day (local time)")
+            plt.grid()
+            plt.xlim(0,23)
+            plt.show()
+            
+            # Polar/clock Plot:
+            _ = stack_wday_time(preloc).copy()
+            _.loc[len(_)+1] = _.iloc[0]
+            _.index = radial_hours(len(_))
+
+            plt.figure(figsize=(12,6))
+            ax = plt.subplot(121, polar=True)
+            _.plot(ax=ax)
+
+            plt.title("Before Lockdown", fontsize=12)
+            clock24_plot_commons(ax)
+
+            ax = plt.subplot(122, polar=True, sharey=ax)
+            _ = stack_wday_time(postloc).copy()
+            _.loc[len(_)+1] = _.iloc[0]
+            _.index = radial_hours(len(_))
+
+            _.plot(ax=ax, ls="--")
+
+            plt.title("After Lockdown", fontsize=12)
+            clock24_plot_commons(ax)
+
+            plt.suptitle("Day/Hour Median Noise levels in Uccle (Brussels, BE)\nStation %s - [%s] Hz" % (channelcode[:]+main[-1], band), fontsize=16)
+            plt.subplots_adjust(top=0.80)
+
