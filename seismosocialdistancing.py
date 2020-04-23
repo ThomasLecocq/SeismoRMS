@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 import pandas as pd
 import numpy as np
 from obspy import UTCDateTime
@@ -60,7 +61,7 @@ class PSDs(object):
              type='timeseries',
              **args):
         plot(self.displacement_RMS,
-             mode=mode,
+             type=type,
              **args)
              
     def clockplot(self,
@@ -118,7 +119,6 @@ class PSDs(object):
             index = pd.DatetimeIndex(times[mseedid])
             self.displacement_RMS[mseedid] = pd.DataFrame(displacement_RMS[mseedid], 
                                                           index=index)
-
 
 def pqlx2psds(sshuserhost,
               network = 'CH',
@@ -239,8 +239,8 @@ def hourmap(data,
     theta = np.asarray([(d.hour/24+d.minute/60/24)*np.pi*2-width/2 for d in data.index])
     radii = np.asarray([int(d.to_julian_date()+0.5) for d in data.index])
     radii = radii-min(radii)
-    norm = colors.Normalize(vmin=np.nanpercentile(data,1),
-                            vmax=np.nanpercentile(data,95))
+    norm = colors.Normalize(vmin=scale*np.nanpercentile(data,1),
+                            vmax=scale*np.nanpercentile(data,95))
     c_m = plt.cm.viridis
     s_m = plt.cm.ScalarMappable(cmap=c_m, 
                                 norm=norm)
@@ -288,12 +288,12 @@ def hourmap(data,
                borderaxespad=0, 
                frameon=False)
     cb=plt.colorbar(s_m,orientation='horizontal')#,pad=0.07)
-    ticks = ticker.FuncFormatter(lambda x, pos: "{0:g}".format(x*scale))
-    cb.ax.xaxis.set_major_formatter(ticks)
+    #ticks = ticker.FuncFormatter(lambda x, pos: "{0:g}".format(x*scale))
+    #cb.ax.xaxis.set_major_formatter(ticks)
     cb.ax.set_xlabel("Displacement (nm)")    
     
     ax.bar(theta[valid], radii[valid], 
-           color=s_m.to_rgba(np.asarray([v for v in data])[valid]),
+           color=s_m.to_rgba(scale*np.asarray([v for v in data])[valid]),
            bottom=radii[valid]-1,
            width=width)
     
@@ -377,12 +377,12 @@ def plot(displacement_RMS,
                          bans=bans,
                          scale=scale)
             ax.set_title('Seismic Noise for %s - Filter: [%s] Hz' % (channelcode[:]+main[-1],band))
-            if show:
-                plt.show()
             if save is not None:
                 ax.figure.savefig("%s-hourmap.pdf"%basename,bbox_inches='tight')
                 ax.figure.savefig("%s-hourmap.png"%basename,bbox_inches='tight')
-                
+            if show:
+                plt.show()
+               
             
         if type in ['*', 'all', 'timeseries']:
             fig = plt.figure(figsize=(12,6))
@@ -428,11 +428,11 @@ def plot(displacement_RMS,
                             zorder=-9,
                             label='\n'.join(wrapper.wrap(bans[ban])))
             plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-            if show:
-                plt.show()
             if save is not None:
                 fig.savefig("%s.pdf"%basename,bbox_inches='tight')
                 fig.savefig("%s.png"%basename,bbox_inches='tight')
+            if show:
+                plt.show()
         
         if type in ['*', 'all', 'clockplots']:
             data[main] = localize_tz_and_reindex(data[main], "30Min")
@@ -451,11 +451,11 @@ def plot(displacement_RMS,
             plt.xlabel("Hour of day (local time)")
             plt.grid()
             plt.xlim(0,23)
-            if show:
-                plt.show()
             if save is not None:
                 ax.figure.savefig("%s-daily.pdf"%basename,bbox_inches='tight')
                 ax.figure.savefig("%s-daily.png"%basename,bbox_inches='tight')
+            if show:
+                plt.show()
             
             # Polar/clock Plot:
             _ = stack_wday_time(preloc).copy()
@@ -483,9 +483,88 @@ def plot(displacement_RMS,
                                                                                     channelcode[:]+main[-1],
                                                                                     band), fontsize=16)
             plt.subplots_adjust(top=0.80)
-            if show:
-                plt.show()
             if save is not None:
                 ax.figure.savefig("%s-hourly.pdf"%basename,bbox_inches='tight')
                 ax.figure.savefig("%s-hourly.png"%basename,bbox_inches='tight')
+            if show:
+                plt.show()
+   
+
+
+if __name__ == "__main__":
+    # Include standard modules
+    import argparse
+    # Initiate the parser
+    parser = argparse.ArgumentParser()
+    # Add long and short argument
+    parser.add_argument("--freqs", "-f", 
+                        help="set freqs ([(4.0,14.0)])", 
+                        default=[(4.0,14.0)])
+    parser.add_argument("--network", "-n", 
+                        help="set network ('AA')", 
+                        default='CH')
+    parser.add_argument("--station", "-s", 
+                        help="set station ('CCC,DDD')", 
+                        default='SGEV')
+    parser.add_argument("--location", "-l", 
+                        help="set location ('EE')", 
+                        default='')
+    parser.add_argument("--channel", "-c", 
+                        help="set channel ('FFF,GGG')", 
+                        default='HGZ,HGE,HGN')
+    parser.add_argument("--begin", "-b", 
+                        help="set start time (days from now or date string '2020-03-04')",
+                        type=int, 
+                        default=3)
+    parser.add_argument("--end", "-e", 
+                        help="set end time (days from now or date string '2020-03-07')", 
+                        type=int, 
+                        default=0)
+    parser.add_argument("--type", "-t", 
+                        help="set plot type ('*', 'timeseries', 'clockplots', 'clockmaps')", 
+                        default='timeseries')
+    parser.add_argument("--output", "-o", 
+                        help="save plot (can provide a path)", 
+                        default='./')
+    parser.add_argument("--pqlx", "-p", 
+                        help="set PQLX mode", 
+                        action="store_true")
+    parser.add_argument("--sshuserhost", "-S", 
+                        help="set ssh parameter (login@hostname)", 
+                        default='SQLX')
+    parser.add_argument("--dbname", "-d", 
+                        help="set dbname, pqlx mode", 
+                        default='AllNetworks')
+    parser.add_argument("--blocksize", "-x", 
+                        help="set blocksize (numbers of pqlx PSD extracted at one time)", 
+                        type=int,
+                        default=31*24*2)
+    # Read arguments from the command line
+    args = parser.parse_args()
+    print(args)
+    # Check for --pqlx
+    if args.pqlx:
+        myPSDs=pqlx2psds(args.sshuserhost,
+                         freqs = args.freqs,
+                         network = args.network,
+                         station = args.station,
+                         location = args.location,
+                         channel = args.channel,
+                         dbname = args.dbname,
+                         start = UTCDateTime()-60*60*24*args.begin,
+                         end = UTCDateTime()-60*60*24*args.end,
+                         blocksize = args.blocksize)
+    myPSDs.dRMS(freqs=args.freqs)
+    myPSDs.plot(type=args.type,
+                save=args.output,
+                band = "4.0-14.0",
+                logo = 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/44/Logo_SED_2014.png/220px-Logo_SED_2014.png',
+                bans = {"2020-03-20":'Groups >5 banned',
+                        "2020-03-13":'Groups >100 banned'},
+                scale = 1e9,
+                time_zone = "Europe/Brussels",
+                sitedesc = "",# "in Uccle (Brussels, BE)", in original example
+                show = True,
+                )
+
 
