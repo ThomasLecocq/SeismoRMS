@@ -13,6 +13,12 @@ import matplotlib.patheffects as pe
 
 # For main plot
 import datetime
+import textwrap
+wrapper = textwrap.TextWrapper(width=15,break_long_words=False)
+
+# to edit text in Illustrator
+import matplotlib
+matplotlib.rcParams['pdf.fonttype'] = 42
 
 
 class PSDs(object):
@@ -51,24 +57,22 @@ class PSDs(object):
         self.dRMS(freqs=freqs)
         
     def plot(self,
-             mode='timeseries',
+             type='timeseries',
              **args):
         plot(self.displacement_RMS,
              mode=mode,
              **args)
              
     def clockplot(self,
-                  mode='clockplots',
                   **args):
         plot(self.displacement_RMS,
-             mode=mode,
+             type='clockplots',
              **args)
            
     def clockmap(self,
-                 mode='clockmaps',
                  **args):
         plot(self.displacement_RMS,
-             mode=mode,
+             type='clockmaps',
              **args)
     
     def dRMS(self,
@@ -254,7 +258,7 @@ def hourmap(data,
     ax.set_theta_direction(-1)
     ax.set_rmax(max(radii))
     if bans is not None:
-        rticks = [(UTCDateTime(ban).datetime - data.index.min().to_pydatetime()).days for iban,ban in enumerate(bans.keys())]
+        rticks = [((UTCDateTime(ban).datetime - data.index.min().to_pydatetime()).days)*2 for iban,ban in enumerate(bans.keys())]
         xticks = [(UTCDateTime(ban).datetime.hour/24+UTCDateTime(ban).datetime.minute/60/24)*np.pi*2 for iban,ban in enumerate(bans.keys())]
         labels = [bans[iban] for iban in bans.keys()]
         xticks = [xticks[i] for i,d in enumerate(rticks) if d>0]
@@ -266,7 +270,7 @@ def hourmap(data,
                            labels,
                            range(len(labels))):
             ax.plot(x,r,'o',
-                    label=l,
+                    label='\n'.join(wrapper.wrap(l)),
                     color='C%d'%c,
                     path_effects=[pe.withStroke(linewidth=5,
                                                 foreground='w'),
@@ -330,11 +334,13 @@ def plot(displacement_RMS,
          logo = 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/44/Logo_SED_2014.png/220px-Logo_SED_2014.png',
          bans = {"2020-03-20":'Groups >5 banned',
                  "2020-03-13":'Groups >100 banned'},
-         mode = '*',
+         type = '*',
          scale = 1e9,
          time_zone = "Europe/Brussels",
+         sitedesc = "",# "in Uccle (Brussels, BE)", in original example
+         show = True,
+         save = None,
          ):
-    
     for channelcode in list(set([k[:-1] for k in displacement_RMS])):
         
         
@@ -361,14 +367,24 @@ def plot(displacement_RMS,
                         data[main][i] += data[o][i]**2
             for i,t in enumerate(data[main].index):
                 data[main][i] = data[main][i]**.5
-        
-        if mode in ['*', 'all', 'clockmaps']:
+
+        basename = "%s%s-%s"%(save,
+                              channelcode[:]+main[-1],
+                              band)
+                              
+        if type in ['*', 'all', 'clockmaps']:
             ax = hourmap(data[main],
                          bans=bans,
                          scale=scale)
             ax.set_title('Seismic Noise for %s - Filter: [%s] Hz' % (channelcode[:]+main[-1],band))
+            if show:
+                plt.show()
+            if save is not None:
+                ax.figure.savefig("%s-hourmap.pdf"%basename,bbox_inches='tight')
+                ax.figure.savefig("%s-hourmap.png"%basename,bbox_inches='tight')
+                
             
-        if mode in ['*', 'all', 'timeseries']:
+        if type in ['*', 'all', 'timeseries']:
             fig = plt.figure(figsize=(12,6))
             if logo is not None:
                 fig.figimage(plt.imread(logo),
@@ -410,10 +426,15 @@ def plot(displacement_RMS,
                             linestyle=['-', '--', '-.', ':'][iban],
                             path_effects=[pe.withStroke(linewidth=4, foreground="k")],
                             zorder=-9,
-                            label=bans[ban])
-            plt.legend(loc='upper left', bbox_to_anchor=(1, 0.5))
+                            label='\n'.join(wrapper.wrap(bans[ban])))
+            plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+            if show:
+                plt.show()
+            if save is not None:
+                fig.savefig("%s.pdf"%basename,bbox_inches='tight')
+                fig.savefig("%s.png"%basename,bbox_inches='tight')
         
-        if mode in ['*', 'all', 'clockplots']:
+        if type in ['*', 'all', 'clockplots']:
             data[main] = localize_tz_and_reindex(data[main], "30Min")
             preloc = data[main].loc[:list(bans.keys())[0]]
             preloc = preloc.set_index([preloc.index.day_name(), preloc.index.hour+preloc.index.minute/60.])
@@ -430,7 +451,11 @@ def plot(displacement_RMS,
             plt.xlabel("Hour of day (local time)")
             plt.grid()
             plt.xlim(0,23)
-            plt.show()
+            if show:
+                plt.show()
+            if save is not None:
+                ax.figure.savefig("%s-daily.pdf"%basename,bbox_inches='tight')
+                ax.figure.savefig("%s-daily.png"%basename,bbox_inches='tight')
             
             # Polar/clock Plot:
             _ = stack_wday_time(preloc).copy()
@@ -454,6 +479,13 @@ def plot(displacement_RMS,
             plt.title("After Lockdown", fontsize=12)
             clock24_plot_commons(ax)
 
-            plt.suptitle("Day/Hour Median Noise levels in Uccle (Brussels, BE)\nStation %s - [%s] Hz" % (channelcode[:]+main[-1], band), fontsize=16)
+            plt.suptitle("Day/Hour Median Noise levels %s\nStation %s - [%s] Hz" % (sitedesc,
+                                                                                    channelcode[:]+main[-1],
+                                                                                    band), fontsize=16)
             plt.subplots_adjust(top=0.80)
+            if show:
+                plt.show()
+            if save is not None:
+                ax.figure.savefig("%s-hourly.pdf"%basename,bbox_inches='tight')
+                ax.figure.savefig("%s-hourly.png"%basename,bbox_inches='tight')
 
