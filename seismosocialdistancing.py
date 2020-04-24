@@ -49,13 +49,8 @@ class PSDs(object):
     
     def clientpqlx(self,
                    sshuserhost='',
-                   freqs=[(0.1,1.0),
-                          (1.0,20.0),
-                          (4.0,14.0),
-                          (4.0,20.0)],
                    **args):
         pqlx2psds(sshuserhost,self=self,**args)
-        self.dRMS(freqs=freqs)
         
     def plot(self,
              type='timeseries',
@@ -206,6 +201,7 @@ def pqlx2psds(sshuserhost,
                 self.count[(mseedid,time)] += [1]
                 self.psd[(mseedid,time)] += [float(data[3])]
                 self.per[(mseedid,time)] += [float(data[2])]
+    self.dRMS(freqs=freqs)
     if rflag:
         return self
     
@@ -554,7 +550,6 @@ if __name__ == "__main__":
                          start = UTCDateTime()-60*60*24*args.begin,
                          end = UTCDateTime()-60*60*24*args.end,
                          blocksize = args.blocksize)
-    myPSDs.dRMS(freqs=args.freqs)
     myPSDs.plot(type=args.type,
                 save=args.output,
                 band = "4.0-14.0",
