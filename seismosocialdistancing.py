@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from obspy import UTCDateTime
 
-# For sqlx
+# For pqlx
 import subprocess,sys
 
 # For hour map
@@ -48,7 +48,7 @@ class PSDs(object):
             self.mseedids+=[mseedid]
     
     def clientpqlx(self,
-                   sshuserhost='',
+                   sshuserhost='user@hostname',
                    **args):
         pqlx2psds(sshuserhost,self=self,**args)
         
@@ -336,6 +336,7 @@ def plot(displacement_RMS,
          sitedesc = "",# "in Uccle (Brussels, BE)", in original example
          show = True,
          save = None,
+         format = 'pdf',
          ):
     for channelcode in list(set([k[:-1] for k in displacement_RMS])):
         
@@ -372,10 +373,11 @@ def plot(displacement_RMS,
             ax = hourmap(data[main],
                          bans=bans,
                          scale=scale)
+            title = 'Seismic Noise for %s - Filter: [%s] Hz' % (channelcode[:]+main[-1],band)
             ax.set_title('Seismic Noise for %s - Filter: [%s] Hz' % (channelcode[:]+main[-1],band))
             if save is not None:
-                ax.figure.savefig("%s-hourmap.pdf"%basename,bbox_inches='tight')
-                ax.figure.savefig("%s-hourmap.png"%basename,bbox_inches='tight')
+                ax.figure.savefig("%s-hourmap.%s"%(basename,format),
+                                  bbox_inches='tight')
             if show:
                 plt.show()
                
@@ -425,8 +427,8 @@ def plot(displacement_RMS,
                             label='\n'.join(wrapper.wrap(bans[ban])))
             plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
             if save is not None:
-                fig.savefig("%s.pdf"%basename,bbox_inches='tight')
-                fig.savefig("%s.png"%basename,bbox_inches='tight')
+                fig.savefig("%s.%s"%(basename,format),
+                            bbox_inches='tight')
             if show:
                 plt.show()
         
@@ -448,8 +450,8 @@ def plot(displacement_RMS,
             plt.grid()
             plt.xlim(0,23)
             if save is not None:
-                ax.figure.savefig("%s-daily.pdf"%basename,bbox_inches='tight')
-                ax.figure.savefig("%s-daily.png"%basename,bbox_inches='tight')
+                ax.figure.savefig("%s-daily.%s"%(basename,format),
+                                  bbox_inches='tight')
             if show:
                 plt.show()
             
@@ -480,8 +482,8 @@ def plot(displacement_RMS,
                                                                                     band), fontsize=16)
             plt.subplots_adjust(top=0.80)
             if save is not None:
-                ax.figure.savefig("%s-hourly.pdf"%basename,bbox_inches='tight')
-                ax.figure.savefig("%s-hourly.png"%basename,bbox_inches='tight')
+                ax.figure.savefig("%s-hourly.%s"%(basename,format),
+                                  bbox_inches='tight')
             if show:
                 plt.show()
    
@@ -490,6 +492,14 @@ def plot(displacement_RMS,
 if __name__ == "__main__":
     # Include standard modules
     import argparse
+    # parse key pairs into a dictionary
+    class StoreDictKeyPair(argparse.Action):
+        def __call__(self, parser, namespace, values, option_string=None):
+            my_dict = {}
+            for kv in values.split(","):
+                k,v = kv.split("=")
+                my_dict[k] = v
+            setattr(namespace, self.dest, my_dict)
     # Initiate the parser
     parser = argparse.ArgumentParser()
     # Add long and short argument
@@ -516,12 +526,43 @@ if __name__ == "__main__":
                         help="set end time (days from now or date string '2020-03-07')", 
                         type=int, 
                         default=0)
+    # Arguments for the plots
     parser.add_argument("--type", "-t", 
                         help="set plot type ('*', 'timeseries', 'clockplots', 'clockmaps')", 
                         default='timeseries')
     parser.add_argument("--output", "-o", 
                         help="save plot (can provide a path)", 
                         default='./')
+    parser.add_argument("--extension", "-E", 
+                        help="format of the file to save plot (e.g. 'png','pdf')", 
+                        default='pdf')
+    parser.add_argument("--band", "-F", 
+                        help="frequency band for the plot", 
+                        default='4.0-14.0')
+    parser.add_argument("--logo", "-L", 
+                        help="add logo on the plot (a url or path)", 
+                        default='https://upload.wikimedia.org/wikipedia/commons/thumb/4/44/Logo_SED_2014.png/220px-Logo_SED_2014.png')
+    parser.add_argument("--bans", "-B", 
+                        dest="bans", 
+                        help="provide dates and label of lockdowns",
+                        default={"2020-03-20":'Groups >5 banned',
+                                 "2020-03-13":'Groups >100 banned'},
+                        action=StoreDictKeyPair, 
+                        metavar="DATE1=LABEL1,DATE2=LABEL2...")
+    parser.add_argument("--time_zone", "-z", 
+                        help="time zone for station (e.g. Europe/Brussels)", 
+                        default="Europe/Brussels")
+    parser.add_argument("--sitedesc", "-D", 
+                       help="site description e.g. 'in Uccle (Brussels, BE)'",                       default="")
+    parser.add_argument("--show", "-y", 
+                        help="show the plot (True)",
+                        default=True, # In any case the default is changed
+                        action="store_true")
+    parser.add_argument("--noshow", "-Y", 
+                        help="do not show the plot (False)", 
+                        default=False,
+                        action="store_true")
+    # Arguments of the PQLX interface
     parser.add_argument("--pqlx", "-p", 
                         help="set PQLX mode", 
                         action="store_true")
@@ -532,11 +573,29 @@ if __name__ == "__main__":
                         help="set dbname, pqlx mode", 
                         default='AllNetworks')
     parser.add_argument("--blocksize", "-x", 
-                        help="set blocksize (numbers of pqlx PSD extracted at one time)", 
+                        help="set blocksize (number PSDs fetched at once)", 
                         type=int,
                         default=31*24*2)
     # Read arguments from the command line
     args = parser.parse_args()
+    # Pre-process args
+    show=True
+    if args.noshow:
+        args.show=False
+    if isinstance(args.begin,str):
+        args.begin=UTCDateTime(args.begin)
+    else:
+        args.begin=UTCDateTime()-60*60*24*args.begin
+    if isinstance(args.end,str):
+        args.end=UTCDateTime(args.end)
+    else:
+        args.end=UTCDateTime()-60*60*24*args.end
+    args.begin._set_minute(0)
+    args.begin._set_second(0)
+    args.begin._set_microsecond(0)
+    args.end._set_minute(0)
+    args.end._set_second(0)
+    args.end._set_microsecond(0)
     print(args)
     # Check for --pqlx
     if args.pqlx:
@@ -547,19 +606,19 @@ if __name__ == "__main__":
                          location = args.location,
                          channel = args.channel,
                          dbname = args.dbname,
-                         start = UTCDateTime()-60*60*24*args.begin,
-                         end = UTCDateTime()-60*60*24*args.end,
+                         start = args.begin,
+                         end = args.end,
                          blocksize = args.blocksize)
     myPSDs.plot(type=args.type,
                 save=args.output,
-                band = "4.0-14.0",
-                logo = 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/44/Logo_SED_2014.png/220px-Logo_SED_2014.png',
-                bans = {"2020-03-20":'Groups >5 banned',
-                        "2020-03-13":'Groups >100 banned'},
-                scale = 1e9,
-                time_zone = "Europe/Brussels",
-                sitedesc = "",# "in Uccle (Brussels, BE)", in original example
-                show = True,
+                band=args.band,
+                logo=args.logo,
+                bans=args.bans,
+                scale=1e9,
+                time_zone=args.time_zone,
+                sitedesc=args.sitedesc,
+                show=args.show,
+                format=args.extension,
                 )
 
 
