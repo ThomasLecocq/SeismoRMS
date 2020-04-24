@@ -13,6 +13,7 @@ import matplotlib.ticker as ticker
 import matplotlib.patheffects as pe
 
 # For main plot
+import os
 import datetime
 import textwrap
 wrapper = textwrap.TextWrapper(width=15,break_long_words=False)
@@ -338,6 +339,9 @@ def plot(displacement_RMS,
          save = None,
          format = 'pdf',
          ):
+    if save is not None and not os.path.isdir(save):
+        os.makedirs(save)
+
     for channelcode in list(set([k[:-1] for k in displacement_RMS])):
         
         
