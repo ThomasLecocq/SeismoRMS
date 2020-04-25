@@ -1,8 +1,9 @@
+#!/usr/bin/python3
 import pandas as pd
 import numpy as np
 from obspy import UTCDateTime
 
-# For sqlx
+# For pqlx
 import subprocess,sys
 
 # For hour map
@@ -11,14 +12,34 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import matplotlib.patheffects as pe
 
+# For main plot
+import os
+import datetime
+import textwrap
+wrapper = textwrap.TextWrapper(width=15,break_long_words=False)
+
+# to edit text in Illustrator
+import matplotlib
+matplotlib.rcParams['pdf.fonttype'] = 42
+
 
 class PSDs(object):
-    def __init__(self,count={},psd={},per={},times=[],mseedids=[]):
-        self.count=count
-        self.psd=psd
-        self.per=per
-        self.times=times
-        self.mseedids=mseedids
+    def __init__(self,
+                 count={},psd={},per={},times=[],mseedids=[],
+                 reloadme=None):
+        if reloadme is None:
+            self.count=count
+            self.psd=psd
+            self.per=per
+            self.times=times
+            self.mseedids=mseedids
+        else:
+            self.count=reloadme.count
+            self.psd=reloadme.psd
+            self.per=reloadme.per
+            self.times=reloadme.times
+            self.mseedids=reloadme.mseedids
+            
     def add(self,time,mseedid):
         if (mseedid,time) not in self.psd:
             self.count[(mseedid,time)]=[]
@@ -26,6 +47,31 @@ class PSDs(object):
             self.per[(mseedid,time)]=[]
             self.times+=[(mseedid,time)]
             self.mseedids+=[mseedid]
+    
+    def clientpqlx(self,
+                   sshuserhost='user@hostname',
+                   **args):
+        pqlx2psds(sshuserhost,self=self,**args)
+        
+    def plot(self,
+             type='timeseries',
+             **args):
+        plot(self.displacement_RMS,
+             type=type,
+             **args)
+             
+    def clockplot(self,
+                  **args):
+        plot(self.displacement_RMS,
+             type='clockplots',
+             **args)
+           
+    def clockmap(self,
+                 **args):
+        plot(self.displacement_RMS,
+             type='clockmaps',
+             **args)
+    
     def dRMS(self,
              freqs=[(0.1,1.0),
                     (1.0,20.0),
@@ -70,8 +116,7 @@ class PSDs(object):
             self.displacement_RMS[mseedid] = pd.DataFrame(displacement_RMS[mseedid], 
                                                           index=index)
 
-
-def sqlx2drms(sshuserhost,
+def pqlx2psds(sshuserhost,
               network = 'CH',
               station = 'SGEV',
               location = '',
@@ -79,7 +124,9 @@ def sqlx2drms(sshuserhost,
               dbname = 'AllNetworks',
               start = UTCDateTime()-3*24*60*60,#"2020-03-07")
               end = UTCDateTime(),# means "now"
-              freqs = [(0.1,1.0),(1.0,20.0),(4.0,14.0),(4.0,20.0)]):
+              freqs = [(0.1,1.0),(1.0,20.0),(4.0,14.0),(4.0,20.0)],
+              blocksize = 31*24*2, # equivalent to 9 days 1 channel
+              self = None):
     """
     Get PSDs from PQLX
     
@@ -99,47 +146,46 @@ def sqlx2drms(sshuserhost,
 
     >>>myPSDs = sqlx2drms('login@hostname')
     """
-    psds=PSDs()
-    datesplit = pd.date_range(start.datetime, 
-                              end.datetime, 
-                              freq="9D")
-    #print(datesplit)
-    for date in datesplit:
-        if date>= end.datetime:
+    rflag=False
+    if self is None:
+        rflag=True
+        self=PSDs()
+    commands = []
+    datelist = pd.date_range(start.datetime,
+                             end.datetime,
+                             freq="30min")
+    for date1 in datelist:
+        date2 = date1+pd.Timedelta(minutes=30)
+        if date2 > end.datetime:
             break
-        ssh = subprocess.Popen(["ssh", 
-                                "-i .ssh/id_rsa", 
+        for n in network.split(','):
+            for s in station.split(','):
+                for l in location.split(','):
+                    for c in channel.split(','):
+                        mseedid = '.'.join([n,s,l,c])
+                        command = 'exPSDhour'
+                        command += ' AllNetworks'
+                        command += ' %s'%mseedid.replace('..','.--.').replace('.',' ')
+                        command += ' %s'%date1.strftime("%Y-%m-%d")
+                        command += ' %s'%date2.strftime("%Y-%m-%d")
+                        command += ' %s'%date1.strftime('%X')
+                        command += ' %s'%date2.strftime('%X')
+                        command += ' P | sed "s/$/\t%s\tmyprecious/"\n'%(mseedid)
+                        commands += [command]
+    
+    for c in range(0,len(commands),blocksize):
+        ssh = subprocess.Popen(["ssh",
+                                "-i .ssh/id_rsa",
                                 sshuserhost],#sys.argv[1]],
                                stdin =subprocess.PIPE,
                                stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE,
                                universal_newlines=True,
                                bufsize=0)
-         
-        datelist = pd.date_range(date, 
-                                 date+pd.Timedelta(9, unit='D'), 
-                                 freq="30min")
-        #print(datelist)
-        # Send ssh commands to stdin
-        for date1 in datelist:
-            if date1>= end.datetime:
-                break
-            date2 = date1+pd.Timedelta(minutes=30)
-            for n in network.split(','):
-                for s in station.split(','):
-                    for l in location.split(','):
-                        for c in channel.split(','):
-                            mseedid = '.'.join([n,s,l,c])
-                            command = 'exPSDhour'
-                            command += ' AllNetworks'
-                            command += ' %s'%mseedid.replace('..','.--.').replace('.',' ')
-                            command += ' %s'%date1.strftime("%Y-%m-%d")
-                            command += ' %s'%date2.strftime("%Y-%m-%d")
-                            command += ' %s'%date1.strftime('%X')
-                            command += ' %s'%date2.strftime('%X')
-                            command += ' P | sed "s/$/\t%s\tmyprecious/"\n'%(mseedid)
-                            #print(date1, date2)
-                            ssh.stdin.write(command)
+        stop = c+blocksize
+        stop = min([len(commands),stop])
+        for cc,command in enumerate(commands[c:stop]):
+            ssh.stdin.write(command)
         ssh.stdin.close()
 
         # Fetch output
@@ -152,15 +198,18 @@ def sqlx2drms(sshuserhost,
                     continue
                 mseedid = data[-1]
                 time = UTCDateTime('%s %s'%(data[0],data[1])).datetime
-                psds.add(time,mseedid)
-                psds.count[(mseedid,time)] += [1]
-                psds.psd[(mseedid,time)] += [float(data[3])]
-                psds.per[(mseedid,time)] += [float(data[2])]
-    return psds
+                self.add(time,mseedid)
+                self.count[(mseedid,time)] += [1]
+                self.psd[(mseedid,time)] += [float(data[3])]
+                self.per[(mseedid,time)] += [float(data[2])]
+    self.dRMS(freqs=freqs)
+    if rflag:
+        return self
     
 
 def hourmap(data,
-            bans=None,
+            bans = {"2020-03-13":'Groups >100 banned',
+                    "2020-03-20":'Groups >5 banned'},
             ax=None,
             scale = 1e9):
     """
@@ -187,8 +236,8 @@ def hourmap(data,
     theta = np.asarray([(d.hour/24+d.minute/60/24)*np.pi*2-width/2 for d in data.index])
     radii = np.asarray([int(d.to_julian_date()+0.5) for d in data.index])
     radii = radii-min(radii)
-    norm = colors.Normalize(vmin=np.nanpercentile(data,1),
-                            vmax=np.nanpercentile(data,95))
+    norm = colors.Normalize(vmin=scale*np.nanpercentile(data,1),
+                            vmax=scale*np.nanpercentile(data,95))
     c_m = plt.cm.viridis
     s_m = plt.cm.ScalarMappable(cmap=c_m, 
                                 norm=norm)
@@ -201,12 +250,12 @@ def hourmap(data,
             #path_effects=[pe.withStroke(linewidth=2,foreground='w')]
             )
     ax.set_xticks(np.linspace(0,np.pi*2*23/24,24))
-    ax.set_xticklabels(['%dh'%h for h in range(24)])
+    ax.set_xticklabels(['%d h'%h for h in range(24)])
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
     ax.set_rmax(max(radii))
     if bans is not None:
-        rticks = [(UTCDateTime(ban).datetime - data.index.min().to_pydatetime()).days for iban,ban in enumerate(bans.keys())]
+        rticks = [((UTCDateTime(ban).datetime - data.index.min().to_pydatetime()).days)*2 for iban,ban in enumerate(bans.keys())]
         xticks = [(UTCDateTime(ban).datetime.hour/24+UTCDateTime(ban).datetime.minute/60/24)*np.pi*2 for iban,ban in enumerate(bans.keys())]
         labels = [bans[iban] for iban in bans.keys()]
         xticks = [xticks[i] for i,d in enumerate(rticks) if d>0]
@@ -218,7 +267,7 @@ def hourmap(data,
                            labels,
                            range(len(labels))):
             ax.plot(x,r,'o',
-                    label=l,
+                    label='\n'.join(wrapper.wrap(l)),
                     color='C%d'%c,
                     path_effects=[pe.withStroke(linewidth=5,
                                                 foreground='w'),
@@ -236,13 +285,344 @@ def hourmap(data,
                borderaxespad=0, 
                frameon=False)
     cb=plt.colorbar(s_m,orientation='horizontal')#,pad=0.07)
-    ticks = ticker.FuncFormatter(lambda x, pos: "{0:g}".format(x*scale))
-    cb.ax.xaxis.set_major_formatter(ticks)
+    #ticks = ticker.FuncFormatter(lambda x, pos: "{0:g}".format(x*scale))
+    #cb.ax.xaxis.set_major_formatter(ticks)
     cb.ax.set_xlabel("Displacement (nm)")    
     
     ax.bar(theta[valid], radii[valid], 
-           color=s_m.to_rgba(data[valid]),
+           color=s_m.to_rgba(scale*np.asarray([v for v in data])[valid]),
            bottom=radii[valid]-1,
            width=width)
     
     return ax
+
+
+days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday','Saturday','Sunday']
+# Just a bunch of helper functions
+def stack_wday_time(df):
+    """Takes a DateTimeIndex'ed DataFrame and returns the unstaked table: hours vs day name"""
+    return df.groupby(level=(0,1)).median().unstack(level=-1).T.droplevel(0)[days]*1e9
+
+def clock24_plot_commons(ax):
+    # Set the circumference labels
+    ax.set_xticks(np.linspace(0, 2*np.pi, 24, endpoint=False))
+    ax.set_xticklabels(["%i h"%i for i in range(24)], fontsize=8)
+    ax.set_yticklabels(["%i nm" % i for i in np.arange(0,100, 10)], fontsize=7)
+    ax.yaxis.set_tick_params(labelsize=8)
+
+    # Make the labels go clockwise
+    ax.set_theta_direction(-1)
+
+    # Place 0 at the top
+    ax.set_theta_offset(np.pi/2.0)
+    plt.xlabel("Hour (local time)", fontsize=10)
+    plt.grid(True)
+
+def radial_hours(N):
+    hours = np.deg2rad(np.linspace(0, 360, N-1, endpoint=False))
+    hours = np.append(hours, hours[0])
+    return hours
+
+def localize_tz_and_reindex(df, freq="15Min", time_zone = "Europe/Brussels"):
+    return df.copy().tz_localize("UTC").dropna().tz_convert(time_zone).tz_localize(None).resample(freq).mean().to_frame()
+    
+def plot(displacement_RMS,
+         band = "4.0-14.0",
+         logo = 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/44/Logo_SED_2014.png/220px-Logo_SED_2014.png',
+         bans = {"2020-03-20":'Groups >5 banned',
+                 "2020-03-13":'Groups >100 banned'},
+         type = '*',
+         scale = 1e9,
+         time_zone = "Europe/Brussels",
+         sitedesc = "",# "in Uccle (Brussels, BE)", in original example
+         show = True,
+         save = None,
+         format = 'pdf',
+         ):
+    if save is not None and not os.path.isdir(save):
+        os.makedirs(save)
+
+    for channelcode in list(set([k[:-1] for k in displacement_RMS])):
+        
+        
+        data={}
+        for o in 'ZEN':
+            if channelcode+o not in displacement_RMS :
+                continue
+            data[channelcode[-2:]+o] = displacement_RMS[channelcode+o][band]
+            main=channelcode[-2:]+o
+            
+        if len(data.keys())>1:
+            data[channelcode[-2:]+'*'] = data[main].copy().resample("30min").median().tshift(30, "min") # for the sum
+            main=channelcode[-2:]+'*'
+            for i,t in enumerate(data[main].index):
+                data[main][i] = 0
+            for o in data:
+                if o == main:
+                    continue
+                data[o] = data[o].copy().resample("30min" ).median().tshift(30, "min")
+                for i,t in enumerate(data[main].index):
+                    if len(data[o].index)-1<i:
+                        break
+                    if True:#abs(data[o].index[i].timestamp()-data[main].index[i].timestamp())<60:
+                        data[main][i] += data[o][i]**2
+            for i,t in enumerate(data[main].index):
+                data[main][i] = data[main][i]**.5
+
+        basename = "%s%s-%s"%(save,
+                              channelcode[:]+main[-1],
+                              band)
+                              
+        if type in ['*', 'all', 'clockmaps']:
+            ax = hourmap(data[main],
+                         bans=bans,
+                         scale=scale)
+            title = 'Seismic Noise for %s - Filter: [%s] Hz' % (channelcode[:]+main[-1],band)
+            ax.set_title('Seismic Noise for %s - Filter: [%s] Hz' % (channelcode[:]+main[-1],band))
+            if save is not None:
+                ax.figure.savefig("%s-hourmap.%s"%(basename,format),
+                                  bbox_inches='tight')
+            if show:
+                plt.show()
+               
+            
+        if type in ['*', 'all', 'timeseries']:
+            fig = plt.figure(figsize=(12,6))
+            if logo is not None:
+                fig.figimage(plt.imread(logo),
+                             40, 40, alpha=.4, zorder=1)
+            plt.plot(data[main].index, data[main], label = main)
+            
+            for o in data:
+                rs = data[o].copy().between_time("6:00", "16:00")
+                rs = rs.resample("1D" ).median().tshift(12, "H")
+                plt.plot(rs.index, rs,
+                         label="$\overline{%s}$ (6h-16h)"%o)#, c='purple')
+
+            
+
+            # Get normal business days and set their background color to green
+            db = pd.bdate_range(min(data[main].index),
+                                max(data[main].index))
+            for dbi in db:
+                plt.axvspan(dbi, dbi+datetime.timedelta(days=1),
+                            facecolor='lightgreen', edgecolor="none",
+                            alpha=0.2, zorder=-10)
+
+            plt.ylim(0,np.nanpercentile(data[main],95)*1.5)
+            plt.ylim(0,np.nanpercentile(data[main],95)*1.5)
+            ticks = ticker.FuncFormatter(lambda x, pos: "{0:g}".format(x*scale))
+            plt.gca().yaxis.set_major_formatter(ticks)
+            plt.ylabel("Displacement (nm)")
+
+            plt.title('Seismic Noise for %s - Filter: [%s] Hz' % (channelcode[:]+main[-1],
+                                                                  band))
+            plt.xlim(data[main].index.min(), data[main].index.max())
+            fig.autofmt_xdate()
+            plt.grid(True, zorder=-1)
+            plt.gca().set_axisbelow(True)
+            for iban,ban in enumerate(bans.keys()):
+                plt.axvline(UTCDateTime(ban).datetime,
+                            color='r',
+                            linewidth=2,
+                            linestyle=['-', '--', '-.', ':'][iban],
+                            path_effects=[pe.withStroke(linewidth=4, foreground="k")],
+                            zorder=-9,
+                            label='\n'.join(wrapper.wrap(bans[ban])))
+            plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+            if save is not None:
+                fig.savefig("%s.%s"%(basename,format),
+                            bbox_inches='tight')
+            if show:
+                plt.show()
+        
+        if type in ['*', 'all', 'clockplots']:
+            data[main] = localize_tz_and_reindex(data[main], "30Min")
+            preloc = data[main].loc[:list(bans.keys())[0]]
+            preloc = preloc.set_index([preloc.index.day_name(), preloc.index.hour+preloc.index.minute/60.])
+            postloc = data[main].loc[list(bans.keys())[0]:]
+            postloc = postloc.set_index([postloc.index.day_name(), postloc.index.hour+postloc.index.minute/60.])
+            
+            cmap = plt.get_cmap("tab20")
+            
+            ax = stack_wday_time(preloc).plot(figsize=(14,8), cmap = cmap)
+            stack_wday_time(postloc).plot(ls="--", ax=ax, legend=False,cmap = cmap)
+            
+            plt.title("Daily Noise Levels in %s" % (channelcode[:]+main[-1]))
+            plt.ylabel("Amplitude (nm)")
+            plt.xlabel("Hour of day (local time)")
+            plt.grid()
+            plt.xlim(0,23)
+            if save is not None:
+                ax.figure.savefig("%s-daily.%s"%(basename,format),
+                                  bbox_inches='tight')
+            if show:
+                plt.show()
+            
+            # Polar/clock Plot:
+            _ = stack_wday_time(preloc).copy()
+            _.loc[len(_)+1] = _.iloc[0]
+            _.index = radial_hours(len(_))
+
+            plt.figure(figsize=(12,6))
+            ax = plt.subplot(121, polar=True)
+            _.plot(ax=ax)
+
+            plt.title("Before Lockdown", fontsize=12)
+            clock24_plot_commons(ax)
+
+            ax = plt.subplot(122, polar=True, sharey=ax)
+            _ = stack_wday_time(postloc).copy()
+            _.loc[len(_)+1] = _.iloc[0]
+            _.index = radial_hours(len(_))
+
+            _.plot(ax=ax, ls="--")
+
+            plt.title("After Lockdown", fontsize=12)
+            clock24_plot_commons(ax)
+
+            plt.suptitle("Day/Hour Median Noise levels %s\nStation %s - [%s] Hz" % (sitedesc,
+                                                                                    channelcode[:]+main[-1],
+                                                                                    band), fontsize=16)
+            plt.subplots_adjust(top=0.80)
+            if save is not None:
+                ax.figure.savefig("%s-hourly.%s"%(basename,format),
+                                  bbox_inches='tight')
+            if show:
+                plt.show()
+   
+
+
+if __name__ == "__main__":
+    # Include standard modules
+    import argparse
+    # parse key pairs into a dictionary
+    class StoreDictKeyPair(argparse.Action):
+        def __call__(self, parser, namespace, values, option_string=None):
+            my_dict = {}
+            for kv in values.split(","):
+                k,v = kv.split("=")
+                my_dict[k] = v
+            setattr(namespace, self.dest, my_dict)
+    # Initiate the parser
+    parser = argparse.ArgumentParser()
+    # Add long and short argument
+    parser.add_argument("--freqs", "-f", 
+                        help="set freqs ([(4.0,14.0)])", 
+                        default=[(4.0,14.0)])
+    parser.add_argument("--network", "-n", 
+                        help="set network ('AA')", 
+                        default='CH')
+    parser.add_argument("--station", "-s", 
+                        help="set station ('CCC,DDD')", 
+                        default='SGEV')
+    parser.add_argument("--location", "-l", 
+                        help="set location ('EE')", 
+                        default='')
+    parser.add_argument("--channel", "-c", 
+                        help="set channel ('FFF,GGG')", 
+                        default='HGZ,HGE,HGN')
+    parser.add_argument("--begin", "-b", 
+                        help="set start time (days from now or date string '2020-03-04')",
+                        type=int, 
+                        default=3)
+    parser.add_argument("--end", "-e", 
+                        help="set end time (days from now or date string '2020-03-07')", 
+                        type=int, 
+                        default=0)
+    # Arguments for the plots
+    parser.add_argument("--type", "-t", 
+                        help="set plot type ('*', 'timeseries', 'clockplots', 'clockmaps')", 
+                        default='timeseries')
+    parser.add_argument("--output", "-o", 
+                        help="save plot (can provide a path)", 
+                        default='./')
+    parser.add_argument("--extension", "-E", 
+                        help="format of the file to save plot (e.g. 'png','pdf')", 
+                        default='pdf')
+    parser.add_argument("--band", "-F", 
+                        help="frequency band for the plot", 
+                        default='4.0-14.0')
+    parser.add_argument("--logo", "-L", 
+                        help="add logo on the plot (a url or path)", 
+                        default='https://upload.wikimedia.org/wikipedia/commons/thumb/4/44/Logo_SED_2014.png/220px-Logo_SED_2014.png')
+    parser.add_argument("--bans", "-B", 
+                        dest="bans", 
+                        help="provide dates and label of lockdowns",
+                        default={"2020-03-20":'Groups >5 banned',
+                                 "2020-03-13":'Groups >100 banned'},
+                        action=StoreDictKeyPair, 
+                        metavar="DATE1=LABEL1,DATE2=LABEL2...")
+    parser.add_argument("--time_zone", "-z", 
+                        help="time zone for station (e.g. Europe/Brussels)", 
+                        default="Europe/Brussels")
+    parser.add_argument("--sitedesc", "-D", 
+                       help="site description e.g. 'in Uccle (Brussels, BE)'",                       default="")
+    parser.add_argument("--show", "-y", 
+                        help="show the plot (True)",
+                        default=True, # In any case the default is changed
+                        action="store_true")
+    parser.add_argument("--noshow", "-Y", 
+                        help="do not show the plot (False)", 
+                        default=False,
+                        action="store_true")
+    # Arguments of the PQLX interface
+    parser.add_argument("--pqlx", "-p", 
+                        help="set PQLX mode", 
+                        action="store_true")
+    parser.add_argument("--sshuserhost", "-S", 
+                        help="set ssh parameter (login@hostname)", 
+                        default='SQLX')
+    parser.add_argument("--dbname", "-d", 
+                        help="set dbname, pqlx mode", 
+                        default='AllNetworks')
+    parser.add_argument("--blocksize", "-x", 
+                        help="set blocksize (number PSDs fetched at once)", 
+                        type=int,
+                        default=31*24*2)
+    # Read arguments from the command line
+    args = parser.parse_args()
+    # Pre-process args
+    show=True
+    if args.noshow:
+        args.show=False
+    if isinstance(args.begin,str):
+        args.begin=UTCDateTime(args.begin)
+    else:
+        args.begin=UTCDateTime()-60*60*24*args.begin
+    if isinstance(args.end,str):
+        args.end=UTCDateTime(args.end)
+    else:
+        args.end=UTCDateTime()-60*60*24*args.end
+    args.begin._set_minute(0)
+    args.begin._set_second(0)
+    args.begin._set_microsecond(0)
+    args.end._set_minute(0)
+    args.end._set_second(0)
+    args.end._set_microsecond(0)
+    print(args)
+    # Check for --pqlx
+    if args.pqlx:
+        myPSDs=pqlx2psds(args.sshuserhost,
+                         freqs = args.freqs,
+                         network = args.network,
+                         station = args.station,
+                         location = args.location,
+                         channel = args.channel,
+                         dbname = args.dbname,
+                         start = args.begin,
+                         end = args.end,
+                         blocksize = args.blocksize)
+    myPSDs.plot(type=args.type,
+                save=args.output,
+                band=args.band,
+                logo=args.logo,
+                bans=args.bans,
+                scale=1e9,
+                time_zone=args.time_zone,
+                sitedesc=args.sitedesc,
+                show=args.show,
+                format=args.extension,
+                )
+
+
