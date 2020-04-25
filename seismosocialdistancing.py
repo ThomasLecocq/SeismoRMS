@@ -1,4 +1,9 @@
 #!/usr/bin/python3
+
+import matplotlib,imp
+# to edit text in Illustrator
+matplotlib.rcParams['pdf.fonttype'] = 42
+
 import pandas as pd
 import numpy as np
 from obspy import UTCDateTime
@@ -17,11 +22,6 @@ import os
 import datetime
 import textwrap
 wrapper = textwrap.TextWrapper(width=15,break_long_words=False)
-
-# to edit text in Illustrator
-import matplotlib
-matplotlib.rcParams['pdf.fonttype'] = 42
-
 
 class PSDs(object):
     def __init__(self,
@@ -50,9 +50,82 @@ class PSDs(object):
     
     def clientpqlx(self,
                    sshuserhost='user@hostname',
+                   #start = UTCDateTime()-3*24*60*60,
+                   #end = UTCDateTime(),
                    **args):
+
         pqlx2psds(sshuserhost,self=self,**args)
+    
+    def load(self,
+             network = 'CH',
+             station = 'SGEV',
+             location = '',
+             channel = 'HGZ,HGE,HGN',
+             start = UTCDateTime()-3*24*60*60,#"2020-03-07")
+             end = UTCDateTime(),# means "now"
+             freqs = [(0.1,1.0),(1.0,20.0),(4.0,14.0),(4.0,20.0)],
+             save='./',
+             clientpqlx=True,
+             clientobspy=False,
+             steps={'clientpqlx':30,'clientobspy':15},
+             sshuserhost='user@hostname',
+             **args):
         
+        self.displacement_RMS = {}
+        if clientpqlx:
+            step = steps['clientpqlx']
+        if clientobspy:
+            step = steps['clientobspy']
+        if save is not None and not os.path.isdir(save):
+            os.makedirs(save)
+        loadfile = '%sSeismoSocialDistancing.h5'%save
+        store = pd.HDFStore(loadfile)
+        for n in network.split(','):
+            for s in station.split(','):
+                for l in location.split(','):
+                    for c in channel.split(','):
+                        backfill = [[start.datetime,end.datetime]]
+                        mseedid='%s.%s.%s.%s'%(n,s,l,c)
+                        if '/'+mseedid.replace('.','_') in store:
+                            tmp=store.select(mseedid.replace('.','_'), 
+                                             columns=["%.1f-%.1f"%f for f in freqs], 
+                                             where=['index>=start.datetime and index<=end.datetime'])
+                            if len(tmp)>0:
+                                print('Loaded',mseedid,min(tmp.index),max(tmp.index))
+                                tlist = pd.date_range(start.datetime, end.datetime, freq="%dmin"%step)
+                                backfill=[[UTCDateTime("1920-03-05").datetime]]
+                                for i,t in enumerate(tlist):
+                                    if min(abs((t-tmp.index).total_seconds())) > step*60*1.5 :
+                                        if (t-backfill[-1][-1]).total_seconds() > step*60*1.5:
+                                            backfill+=[[t, t]]
+                                        else :
+                                            backfill[-1][-1]=t
+                                backfill = backfill[1:]
+                                self.displacement_RMS[mseedid]=tmp
+                        if len(backfill)==0:
+                            continue
+                        if clientpqlx:
+                            for bf in backfill:
+                                print('Loading',mseedid,bf)
+                                tmp = pqlx2psds(sshuserhost,
+                                                network = n,
+                                                station = s,
+                                                location = l,
+                                                channel = c,
+                                                start = UTCDateTime(bf[0]),
+                                                end = UTCDateTime(bf[1]),
+                                                **args)
+                                print('Computing',mseedid,bf)
+                                tmp.dRMS(freqs=freqs)
+                                print('Storing',mseedid,bf)
+                                store.append(mseedid.replace('.','_'),
+                                             tmp.displacement_RMS[mseedid])
+                        tmp = store.select(mseedid.replace('.','_'),
+                                           columns=["%.1f-%.1f"%f for f in freqs],
+                                           where=['index>=start.datetime and index<=end.datetime'])
+                        self.displacement_RMS[mseedid] = tmp
+        store.close()
+
     def plot(self,
              type='timeseries',
              **args):
@@ -110,11 +183,10 @@ class PSDs(object):
             if len(list(dRMS.keys())):
                 displacement_RMS[mseedid].append(dRMS)
                 times[mseedid].append(time)
-        self.displacement_RMS={}
+        self.displacement_RMS = {}
         for mseedid in self.mseedids:
             index = pd.DatetimeIndex(times[mseedid])
-            self.displacement_RMS[mseedid] = pd.DataFrame(displacement_RMS[mseedid], 
-                                                          index=index)
+            self.displacement_RMS[mseedid] = pd.DataFrame(displacement_RMS[mseedid],index=index)
 
 def pqlx2psds(sshuserhost,
               network = 'CH',
@@ -124,8 +196,8 @@ def pqlx2psds(sshuserhost,
               dbname = 'AllNetworks',
               start = UTCDateTime()-3*24*60*60,#"2020-03-07")
               end = UTCDateTime(),# means "now"
-              freqs = [(0.1,1.0),(1.0,20.0),(4.0,14.0),(4.0,20.0)],
               blocksize = 31*24*2, # equivalent to 9 days 1 channel
+              save='./',
               self = None):
     """
     Get PSDs from PQLX
@@ -151,6 +223,7 @@ def pqlx2psds(sshuserhost,
         rflag=True
         self=PSDs()
     commands = []
+    files = []
     datelist = pd.date_range(start.datetime,
                              end.datetime,
                              freq="30min")
@@ -162,6 +235,10 @@ def pqlx2psds(sshuserhost,
             for s in station.split(','):
                 for l in location.split(','):
                     for c in channel.split(','):
+                        savef = '%s/%s/%s/%s%s/%s/%s'%(save,
+                                                       n,s,l,c,
+                                                       date1.strftime("%Y-%m-%d"),
+                                                       date1.strftime('%X').replace(':','.'))
                         mseedid = '.'.join([n,s,l,c])
                         command = 'exPSDhour'
                         command += ' AllNetworks'
@@ -172,7 +249,7 @@ def pqlx2psds(sshuserhost,
                         command += ' %s'%date2.strftime('%X')
                         command += ' P | sed "s/$/\t%s\tmyprecious/"\n'%(mseedid)
                         commands += [command]
-    
+ 
     for c in range(0,len(commands),blocksize):
         ssh = subprocess.Popen(["ssh",
                                 "-i .ssh/id_rsa",
@@ -202,7 +279,7 @@ def pqlx2psds(sshuserhost,
                 self.count[(mseedid,time)] += [1]
                 self.psd[(mseedid,time)] += [float(data[3])]
                 self.per[(mseedid,time)] += [float(data[2])]
-    self.dRMS(freqs=freqs)
+    
     if rflag:
         return self
     
@@ -436,60 +513,61 @@ def plot(displacement_RMS,
             if show:
                 plt.show()
         
-        if type in ['*', 'all', 'clockplots']:
+        if type in ['*', 'all', 'clockplots', 'dailyplots']:
             data[main] = localize_tz_and_reindex(data[main], "30Min")
             preloc = data[main].loc[:list(bans.keys())[0]]
             preloc = preloc.set_index([preloc.index.day_name(), preloc.index.hour+preloc.index.minute/60.])
             postloc = data[main].loc[list(bans.keys())[0]:]
             postloc = postloc.set_index([postloc.index.day_name(), postloc.index.hour+postloc.index.minute/60.])
-            
             cmap = plt.get_cmap("tab20")
-            
-            ax = stack_wday_time(preloc).plot(figsize=(14,8), cmap = cmap)
-            stack_wday_time(postloc).plot(ls="--", ax=ax, legend=False,cmap = cmap)
-            
-            plt.title("Daily Noise Levels in %s" % (channelcode[:]+main[-1]))
-            plt.ylabel("Amplitude (nm)")
-            plt.xlabel("Hour of day (local time)")
-            plt.grid()
-            plt.xlim(0,23)
-            if save is not None:
-                ax.figure.savefig("%s-daily.%s"%(basename,format),
-                                  bbox_inches='tight')
-            if show:
-                plt.show()
-            
-            # Polar/clock Plot:
-            _ = stack_wday_time(preloc).copy()
-            _.loc[len(_)+1] = _.iloc[0]
-            _.index = radial_hours(len(_))
 
-            plt.figure(figsize=(12,6))
-            ax = plt.subplot(121, polar=True)
-            _.plot(ax=ax)
+            if type in ['*', 'all', 'dailyplots']:
+                ax = stack_wday_time(preloc).plot(figsize=(14,8), cmap = cmap)
+                stack_wday_time(postloc).plot(ls="--", ax=ax, legend=False,cmap = cmap)
+                
+                plt.title("Daily Noise Levels in %s" % (channelcode[:]+main[-1]))
+                plt.ylabel("Amplitude (nm)")
+                plt.xlabel("Hour of day (local time)")
+                plt.grid()
+                plt.xlim(0,23)
+                if save is not None:
+                    ax.figure.savefig("%s-daily.%s"%(basename,format),
+                                      bbox_inches='tight')
+                if show:
+                    plt.show()
 
-            plt.title("Before Lockdown", fontsize=12)
-            clock24_plot_commons(ax)
-
-            ax = plt.subplot(122, polar=True, sharey=ax)
-            _ = stack_wday_time(postloc).copy()
-            _.loc[len(_)+1] = _.iloc[0]
-            _.index = radial_hours(len(_))
-
-            _.plot(ax=ax, ls="--")
-
-            plt.title("After Lockdown", fontsize=12)
-            clock24_plot_commons(ax)
-
-            plt.suptitle("Day/Hour Median Noise levels %s\nStation %s - [%s] Hz" % (sitedesc,
-                                                                                    channelcode[:]+main[-1],
-                                                                                    band), fontsize=16)
-            plt.subplots_adjust(top=0.80)
-            if save is not None:
-                ax.figure.savefig("%s-hourly.%s"%(basename,format),
-                                  bbox_inches='tight')
-            if show:
-                plt.show()
+            if type in ['*', 'all', 'clockplots']:
+                # Polar/clock Plot:
+                _ = stack_wday_time(preloc).copy()
+                _.loc[len(_)+1] = _.iloc[0]
+                _.index = radial_hours(len(_))
+    
+                plt.figure(figsize=(12,6))
+                ax = plt.subplot(121, polar=True)
+                _.plot(ax=ax)
+    
+                plt.title("Before Lockdown", fontsize=12)
+                clock24_plot_commons(ax)
+    
+                ax = plt.subplot(122, polar=True, sharey=ax)
+                _ = stack_wday_time(postloc).copy()
+                _.loc[len(_)+1] = _.iloc[0]
+                _.index = radial_hours(len(_))
+    
+                _.plot(ax=ax, ls="--")
+    
+                plt.title("After Lockdown", fontsize=12)
+                clock24_plot_commons(ax)
+    
+                plt.suptitle("Day/Hour Median Noise levels %s\nStation %s - [%s] Hz" % (sitedesc,
+                                                                                        channelcode[:]+main[-1],
+                                                                                        band), fontsize=16)
+                plt.subplots_adjust(top=0.80)
+                if save is not None:
+                    ax.figure.savefig("%s-hourly.%s"%(basename,format),
+                                      bbox_inches='tight')
+                if show:
+                    plt.show()
    
 
 
@@ -524,11 +602,11 @@ if __name__ == "__main__":
                         default='HGZ,HGE,HGN')
     parser.add_argument("--begin", "-b", 
                         help="set start time (days from now or date string '2020-03-04')",
-                        type=int, 
+                        #type=int, 
                         default=3)
     parser.add_argument("--end", "-e", 
                         help="set end time (days from now or date string '2020-03-07')", 
-                        type=int, 
+                        #type=int, 
                         default=0)
     # Arguments for the plots
     parser.add_argument("--type", "-t", 
@@ -586,33 +664,42 @@ if __name__ == "__main__":
     show=True
     if args.noshow:
         args.show=False
-    if isinstance(args.begin,str):
+        plt.switch_backend('Agg')
+    if not isinstance(args.begin,int):
         args.begin=UTCDateTime(args.begin)
     else:
-        args.begin=UTCDateTime()-60*60*24*args.begin
-    if isinstance(args.end,str):
+        args.begin=UTCDateTime()-60*60*24*int(args.begin)
+    if not isinstance(args.end,int):
         args.end=UTCDateTime(args.end)
     else:
-        args.end=UTCDateTime()-60*60*24*args.end
+        args.end=UTCDateTime()-60*60*24*int(args.end)
     args.begin._set_minute(0)
     args.begin._set_second(0)
     args.begin._set_microsecond(0)
     args.end._set_minute(0)
     args.end._set_second(0)
     args.end._set_microsecond(0)
-    print(args)
     # Check for --pqlx
+    clientpqlx=False
+    clientobspy=False
     if args.pqlx:
-        myPSDs=pqlx2psds(args.sshuserhost,
-                         freqs = args.freqs,
-                         network = args.network,
-                         station = args.station,
-                         location = args.location,
-                         channel = args.channel,
-                         dbname = args.dbname,
-                         start = args.begin,
-                         end = args.end,
-                         blocksize = args.blocksize)
+        clientpqlx=True
+    myPSDs = PSDs()
+    print(args)
+    myPSDs.load(clientpqlx = clientpqlx,
+                clientobspy = clientobspy,
+                freqs = args.freqs,
+                save = args.output,
+                network = args.network,
+                station = args.station,
+                location = args.location,
+                channel = args.channel,
+                start = args.begin,
+                end = args.end,
+                sshuserhost=args.sshuserhost,
+                dbname = args.dbname,
+                blocksize = args.blocksize,
+                )
     myPSDs.plot(type=args.type,
                 save=args.output,
                 band=args.band,
