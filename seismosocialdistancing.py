@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-
+from obspy.clients.fdsn import Client
 import matplotlib,imp
 # to edit text in Illustrator
 matplotlib.rcParams['pdf.fonttype'] = 42
@@ -22,6 +22,10 @@ import os
 import datetime
 import textwrap
 wrapper = textwrap.TextWrapper(width=15,break_long_words=False)
+# For maps
+#import cartopy.crs as ccrs
+#from cartopy.io.img_tiles import OSM
+##from mpl_toolkits.basemap import Basemap
 
 class PSDs(object):
     def __init__(self,
@@ -117,13 +121,20 @@ class PSDs(object):
                                                 **args)
                                 print('Computing',mseedid,bf)
                                 tmp.dRMS(freqs=freqs)
-                                print('Storing',mseedid,bf)
+                                if mseedid not in tmp.displacement_RMS:
+                                    print('Missing',mseedid,bf)
+                                    continue
+                                print('Appending',mseedid,bf)
                                 store.append(mseedid.replace('.','_'),
                                              tmp.displacement_RMS[mseedid])
-                        tmp = store.select(mseedid.replace('.','_'),
-                                           columns=["%.1f-%.1f"%f for f in freqs],
-                                           where=['index>=start.datetime and index<=end.datetime'])
-                        self.displacement_RMS[mseedid] = tmp
+                        print('Selecting',mseedid,(start.datetime,end.datetime))   
+                        if '/'+mseedid.replace('.','_') in store:
+                            tmp = store.select(mseedid.replace('.','_'),
+                                               columns=["%.1f-%.1f"%f for f in freqs],
+                                               where=['index>=start.datetime and index<=end.datetime'])
+                            self.displacement_RMS[mseedid] = tmp
+                        else:
+                            print('Missing',mseedid,(start.datetime,end.datetime))
         store.close()
 
     def plot(self,
@@ -132,7 +143,13 @@ class PSDs(object):
         plot(self.displacement_RMS,
              type=type,
              **args)
-             
+
+    def sitemap(self,
+                **args):
+        plot(self.displacement_RMS,
+             type='sitemaps',
+             **args)
+            
     def clockplot(self,
                   **args):
         plot(self.displacement_RMS,
@@ -266,7 +283,7 @@ def pqlx2psds(sshuserhost,
         ssh.stdin.close()
 
         # Fetch output
-        for line in ssh.stdout:
+        for line in ssh.stdout:        
             if 'myprecious' in line:
                 try:
                     data = [v for v in line.strip().split('\t')[:-1]]
@@ -283,6 +300,40 @@ def pqlx2psds(sshuserhost,
     if rflag:
         return self
     
+def sitemap(mseedid,
+            data_provider='ETH',
+            ax=None,
+            self=None):
+
+    if self is None:
+        self=PSDs()
+    if not hasattr(self,'resps'):
+        self.resps = {}
+    c = Client(data_provider)
+    if mseedid not in self.resps:
+        msid = mseedid.split('.')
+        self.resps[mseedid] = c.get_stations(network=msid[0], 
+                                             station=msid[1], 
+                                             location=msid[2],
+                                             channel=msid[3], 
+                                             level="response")
+    if ax is None:
+        ax=plt.figure(figsize=(7,9)).add_subplot(111)
+    longitude = self.resps[mseedid][-1][-1][-1].longitude
+    latitude = self.resps[mseedid][-1][-1][-1].latitude
+    print(longitude,latitude)
+    if False:
+        map = Basemap(llcrnrlon=longitude-0.001,
+                   llcrnrlat=latitude-0.001,
+                   urcrnrlon=longitude+0.001,
+                   urcrnrlat=latitude-0.001, 
+                   epsg=4326,
+                   projection='merc',
+                   ax=ax)
+        map.arcgisimage(service='ESRI_Imagery_World_2D', 
+                     xpixels = 1500, 
+                     verbose= True)
+    return ax
 
 def hourmap(data,
             bans = {"2020-03-13":'Groups >100 banned',
@@ -415,6 +466,8 @@ def plot(displacement_RMS,
          show = True,
          save = None,
          format = 'pdf',
+         self = None,
+         data_provider='ETH',
          ):
     if save is not None and not os.path.isdir(save):
         os.makedirs(save)
@@ -449,7 +502,17 @@ def plot(displacement_RMS,
         basename = "%s%s-%s"%(save,
                               channelcode[:]+main[-1],
                               band)
-                              
+
+        if type in ['*', 'all', 'sitemaps']:    
+            ax=sitemap(channelcode[:]+main[-1],
+                       data_provider=data_provider,
+                       self=self)
+            if save is not None:
+                ax.figure.savefig("%s-map.%s"%(basename,format),
+                                  bbox_inches='tight')
+            if show:
+                plt.show()
+                                
         if type in ['*', 'all', 'clockmaps']:
             ax = hourmap(data[main],
                          bans=bans,
