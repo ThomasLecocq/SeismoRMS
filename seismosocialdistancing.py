@@ -499,6 +499,8 @@ def plot(displacement_RMS,
             for i,t in enumerate(data[main].index):
                 data[main][i] = data[main][i]**.5
 
+        data[main] = localize_tz_and_reindex(data[main], "30Min", time_zone = time_zone)
+
         basename = "%s%s-%s"%(save,
                               channelcode[:]+main[-1],
                               band)
@@ -570,6 +572,12 @@ def plot(displacement_RMS,
                             zorder=-9,
                             label='\n'.join(wrapper.wrap(bans[ban])))
             plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+            
+            ## Idea: add map in an inset below the legend 
+            #axins = inset_axes(ax, width="100%", height="100%",
+            #                   bbox_to_anchor=(1.05, .6, .5, .4),
+            #                   bbox_transform=ax.transAxes, loc=2, borderpad=0)
+            #axins.tick_params(left=False, right=True, labelleft=False, labelright=True)
             if save is not None:
                 fig.savefig("%s.%s"%(basename,format),
                             bbox_inches='tight')
@@ -577,7 +585,6 @@ def plot(displacement_RMS,
                 plt.show()
         
         if type in ['*', 'all', 'clockplots', 'dailyplots']:
-            data[main] = localize_tz_and_reindex(data[main], "30Min")
             preloc = data[main].loc[:list(bans.keys())[0]]
             preloc = preloc.set_index([preloc.index.day_name(), preloc.index.hour+preloc.index.minute/60.])
             postloc = data[main].loc[list(bans.keys())[0]:]
