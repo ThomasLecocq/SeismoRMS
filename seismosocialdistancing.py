@@ -416,9 +416,8 @@ def hourmap(data,
     #ticks = ticker.FuncFormatter(lambda x, pos: "{0:g}".format(x*scale))
     #cb.ax.xaxis.set_major_formatter(ticks)
     cb.ax.set_xlabel("Displacement (nm)")    
-    
     ax.bar(theta[valid], radii[valid], 
-           color=s_m.to_rgba(scale*np.asarray([v for v in data])[valid]),
+           color=s_m.to_rgba(scale*data.values[valid,0]),
            bottom=radii[valid]-1,
            width=width)
     
@@ -500,7 +499,6 @@ def plot(displacement_RMS,
                 data[main][i] = data[main][i]**.5
 
         data[main] = localize_tz_and_reindex(data[main], "30Min", time_zone = time_zone)
-
         basename = "%s%s-%s"%(save,
                               channelcode[:]+main[-1],
                               band)
