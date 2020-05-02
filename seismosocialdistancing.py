@@ -598,6 +598,7 @@ def plot(displacement_RMS,
                 plt.xlabel("Hour of day (local time)")
                 plt.grid()
                 plt.xlim(0,23)
+                plt.ylim(0,np.nanpercentile(data[main],95)*1.5*scale)
                 if save is not None:
                     ax.figure.savefig("%s-daily.%s"%(basename,format),
                                       bbox_inches='tight')
@@ -609,31 +610,44 @@ def plot(displacement_RMS,
                 _ = stack_wday_time(preloc,scale).copy()
                 _.loc[len(_)+1] = _.iloc[0]
                 _.index = radial_hours(len(_))
-    
+                
+                #subplot_kw = {'polar':True}
+                #opts={#'sharey':True,
+                #      'figsize':(12,6),
+                #      'subplot_kw':subplot_kw}
+                #fig, axes  = plt.subplots(1,2,**opts)
+
                 plt.figure(figsize=(12,6))
                 ax = plt.subplot(121, polar=True)
-                _.plot(ax=ax)
+                _.plot(ax=ax)#es[0])
     
                 plt.title("Before Lockdown", fontsize=12)
-                clock24_plot_commons(ax)
+                clock24_plot_commons(ax)#es[0])
+                ax.set_rmax(np.nanpercentile(data[main],95)*1.5*scale)
     
-                ax = plt.subplot(122, polar=True, sharey=ax)
+                ax = plt.subplot(122, polar=True)#, sharey=ax)
                 _ = stack_wday_time(postloc,scale).copy()
                 _.loc[len(_)+1] = _.iloc[0]
                 _.index = radial_hours(len(_))
     
-                _.plot(ax=ax, ls="--")
+                _.plot(ax=ax,#es[0], 
+                       ls="--")
     
                 plt.title("After Lockdown", fontsize=12)
-                clock24_plot_commons(ax)
-    
-                plt.suptitle("Day/Hour Median Noise levels %s\nStation %s - [%s] Hz" % (sitedesc,
-                                                                                        channelcode[:]+main[-1],
-                                                                                        band), fontsize=16)
+                clock24_plot_commons(ax)#es[0])
+                ax.set_rmax(np.nanpercentile(data[main],95)*1.5*scale)
+                
+                suptitle = "Day/Hour Median Noise levels %s\n"
+                suptitle += "Station %s - [%s] Hz"
+                plt.suptitle(suptitle % (sitedesc,
+                                         channelcode[:]+main[-1],
+                                         band),
+                             fontsize=16)
                 plt.subplots_adjust(top=0.80)
                 if save is not None:
-                    ax.figure.savefig("%s-hourly.%s"%(basename,format),
-                                      bbox_inches='tight')
+                    fig = ax.figure
+                    fig.savefig("%s-hourly.%s"%(basename,format),
+                                bbox_inches='tight')
                 if show:
                     plt.show()
    
