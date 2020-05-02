@@ -426,9 +426,9 @@ def hourmap(data,
 
 days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday','Saturday','Sunday']
 # Just a bunch of helper functions
-def stack_wday_time(df):
+def stack_wday_time(df,scale):
     """Takes a DateTimeIndex'ed DataFrame and returns the unstaked table: hours vs day name"""
-    return df.groupby(level=(0,1)).median().unstack(level=-1).T.droplevel(0)[days]*1e9
+    return df.groupby(level=(0,1)).median().unstack(level=-1).T.droplevel(0)[days]*scale
 
 def clock24_plot_commons(ax):
     # Set the circumference labels
@@ -590,8 +590,8 @@ def plot(displacement_RMS,
             cmap = plt.get_cmap("tab20")
 
             if type in ['*', 'all', 'dailyplots']:
-                ax = stack_wday_time(preloc).plot(figsize=(14,8), cmap = cmap)
-                stack_wday_time(postloc).plot(ls="--", ax=ax, legend=False,cmap = cmap)
+                ax = stack_wday_time(preloc,scale).plot(figsize=(14,8), cmap = cmap)
+                stack_wday_time(postloc,scale).plot(ls="--", ax=ax, legend=False,cmap = cmap)
                 
                 plt.title("Daily Noise Levels in %s" % (channelcode[:]+main[-1]))
                 plt.ylabel("Amplitude (nm)")
@@ -606,7 +606,7 @@ def plot(displacement_RMS,
 
             if type in ['*', 'all', 'clockplots']:
                 # Polar/clock Plot:
-                _ = stack_wday_time(preloc).copy()
+                _ = stack_wday_time(preloc,scale).copy()
                 _.loc[len(_)+1] = _.iloc[0]
                 _.index = radial_hours(len(_))
     
@@ -618,7 +618,7 @@ def plot(displacement_RMS,
                 clock24_plot_commons(ax)
     
                 ax = plt.subplot(122, polar=True, sharey=ax)
-                _ = stack_wday_time(postloc).copy()
+                _ = stack_wday_time(postloc,scale).copy()
                 _.loc[len(_)+1] = _.iloc[0]
                 _.index = radial_hours(len(_))
     
