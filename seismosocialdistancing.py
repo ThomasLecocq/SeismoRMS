@@ -4,6 +4,7 @@ import matplotlib,imp
 # to edit text in Illustrator
 matplotlib.rcParams['pdf.fonttype'] = 42
 
+import tqdm
 import pandas as pd
 import numpy as np
 from obspy import UTCDateTime
@@ -73,6 +74,9 @@ class PSDs(object):
              clientobspy=False,
              steps={'clientpqlx':30,'clientobspy':15},
              sshuserhost='user@hostname',
+             tocsv=False,
+             slow=False,
+             output="DISP",
              **args):
         
         self.displacement_RMS = {}
@@ -120,7 +124,11 @@ class PSDs(object):
                                                 end = UTCDateTime(bf[1]),
                                                 **args)
                                 print('Computing',mseedid,bf)
-                                tmp.dRMS(freqs=freqs)
+                                if slow:
+                                    tmp.dRMS(freqs=freqs)
+                                else:
+                                    tmp.dfRMS(freqs=freqs,output=output)
+
                                 if mseedid not in tmp.displacement_RMS:
                                     print('Missing',mseedid,bf)
                                     continue
@@ -133,6 +141,8 @@ class PSDs(object):
                                                columns=["%.1f-%.1f"%f for f in freqs],
                                                where=['index>=start.datetime and index<=end.datetime'])
                             self.displacement_RMS[mseedid] = tmp
+                            if tocsv:
+                                self.displacement_RMS[mseedid].to_csv("%s%s.csv" % (save,mseedid))
                         else:
                             print('Missing',mseedid,(start.datetime,end.datetime))
         store.close()
@@ -161,7 +171,36 @@ class PSDs(object):
         plot(self.displacement_RMS,
              type='clockmaps',
              **args)
-    
+
+    def dfRMS(self,
+              freqs = [(0.1,1.0),(1.0,20.0),(4.0,14.0),(4.0,20.0)],
+              output="DISP"):
+
+        if not hasattr(self,'displacement_RMS'):
+            self.displacement_RMS = {}
+        displacement_RMS = {}
+        mseedids = list(set([mseedid for mseedid,time in self.times])) 
+        for mseedid in mseedids:
+            ind_times = []
+            psd_values = []
+            period_bin_centers = []
+            for mseedid,time in tqdm.tqdm(self.times):
+                if time in self.displacement_RMS[mseedid].index:
+                    continue
+                period_bin_centers = np.sort(np.unique(self.per[(mseedid,time)]))
+                ind_times += [time]
+                psd_values += [self.psd[(mseedid,time)][:len(period_bin_centers)]]
+            ind_times = pd.DatetimeIndex(ind_times)
+            data = pd.DataFrame(psd_values, 
+                                index=ind_times, 
+                                columns=1.0/np.sort(period_bin_centers))
+            data = data.sort_index(axis=1)
+            data = df_rms(data, freqs, output=output)
+            if mseedid in self.displacement_RMS:
+                self.displacement_RMS[mseedid].append(data)
+            else:
+                self.displacement_RMS[mseedid] = df_rms(data, freqs, output=output)
+
     def dRMS(self,
              freqs=[(0.1,1.0),
                     (1.0,20.0),
@@ -205,6 +244,39 @@ class PSDs(object):
             index = pd.DatetimeIndex(times[mseedid])
             self.displacement_RMS[mseedid] = pd.DataFrame(displacement_RMS[mseedid],index=index)
 
+def dfrms(a):
+    return np.sqrt(np.trapz(a.values, a.index))
+
+def df_rms(d, freqs, output="VEL"):
+    d = d.dropna(axis=1, how='all')
+    RMS = {}
+    for fmin, fmax in freqs:
+        
+        ix = np.where((d.columns>=fmin) & (d.columns<=fmax))[0]
+        spec = d.iloc[:,ix]
+        f = d.columns[ix]
+        
+        w2f = (2.0 * np.pi * f)
+
+        # The acceleration power spectrum (dB to Power! = divide by 10 and not 20!)
+        amp = 10.0**(spec/10.) 
+        if output == "ACC":
+            RMS["%.1f-%.1f"%(fmin, fmax)] = amp.apply(dfrms, axis=1)
+            continue
+        
+        # velocity power spectrum (divide by omega**2)
+        vamp = amp / w2f**2
+        if output == "VEL":
+            RMS["%.1f-%.1f"%(fmin, fmax)] = vamp.apply(dfrms, axis=1)
+            continue
+                
+        # displacement power spectrum (divide by omega**2)
+        damp = vamp / w2f**2
+       
+        RMS["%.1f-%.1f"%(fmin, fmax)] = damp.apply(dfrms, axis=1)
+
+    return pd.DataFrame(RMS, index=d.index)#.tz_localize("UTC")#.dropna()
+
 def pqlx2psds(sshuserhost,
               network = 'CH',
               station = 'SGEV',
@@ -246,6 +318,7 @@ def pqlx2psds(sshuserhost,
                              freq="30min")
     for date1 in datelist:
         date2 = date1+pd.Timedelta(minutes=30)
+        date3 = date1+pd.Timedelta(minutes=15)
         if date2 > end.datetime:
             break
         for n in network.split(','):
@@ -264,7 +337,8 @@ def pqlx2psds(sshuserhost,
                         command += ' %s'%date2.strftime("%Y-%m-%d")
                         command += ' %s'%date1.strftime('%X')
                         command += ' %s'%date2.strftime('%X')
-                        command += ' P | sed "s/$/\t%s\tmyprecious/"\n'%(mseedid)
+                        addons = (mseedid,date3.strftime("%Y-%m-%d"),date3.strftime("%X"))
+                        command += ' P | sed "s/$/\t%s\t%s\t%s\tmyprecious/"\n'%addons
                         commands += [command]
  
     for c in range(0,len(commands),blocksize):
@@ -290,7 +364,7 @@ def pqlx2psds(sshuserhost,
                 except:
                     print(line.strip(),'unexpected line')
                     continue
-                mseedid = data[-1]
+                mseedid = data[-3]
                 time = UTCDateTime('%s %s'%(data[0],data[1])).datetime
                 self.add(time,mseedid)
                 self.count[(mseedid,time)] += [1]
@@ -456,8 +530,8 @@ def localize_tz_and_reindex(df, freq="15Min", time_zone = "Europe/Brussels"):
 def plot(displacement_RMS,
          band = "4.0-14.0",
          logo = 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/44/Logo_SED_2014.png/220px-Logo_SED_2014.png',
-         bans = {"2020-03-20":'Groups >5 banned',
-                 "2020-03-13":'Groups >100 banned'},
+         bans = {"2020-03-13":'Groups >100 banned',
+                 "2020-03-20":'Groups >5 banned'},
          type = '*',
          scale = 1e9,
          time_zone = "Europe/Brussels",
@@ -583,9 +657,9 @@ def plot(displacement_RMS,
                 plt.show()
         
         if type in ['*', 'all', 'clockplots', 'dailyplots']:
-            preloc = data[main].loc[:list(bans.keys())[0]]
+            preloc = data[main].loc[:max(list(bans.keys()))]
             preloc = preloc.set_index([preloc.index.day_name(), preloc.index.hour+preloc.index.minute/60.])
-            postloc = data[main].loc[list(bans.keys())[0]:]
+            postloc = data[main].loc[max(list(bans.keys())):]
             postloc = postloc.set_index([postloc.index.day_name(), postloc.index.hour+postloc.index.minute/60.])
             cmap = plt.get_cmap("tab20")
 
@@ -664,11 +738,19 @@ if __name__ == "__main__":
                 k,v = kv.split("=")
                 my_dict[k] = v
             setattr(namespace, self.dest, my_dict)
+    def listoftup(s):
+        try:
+            lt = [ tuple([ float(f) for f in l.split('-')]) for l in s.split(',') ] 
+            return lt
+        except:
+            raise 
     # Initiate the parser
     parser = argparse.ArgumentParser()
     # Add long and short argument
     parser.add_argument("--freqs", "-f", 
-                        help="set freqs ([(4.0,14.0)])", 
+                        help="set freqs ('4.0-14.0')", 
+                        metavar="fmin1-fmax2,fmin2-fmax2,...",
+                        type=listoftup,
                         default=[(4.0,14.0)])
     parser.add_argument("--network", "-n", 
                         help="set network ('AA')", 
@@ -730,6 +812,14 @@ if __name__ == "__main__":
     parser.add_argument("--pqlx", "-p", 
                         help="set PQLX mode", 
                         action="store_true")
+    parser.add_argument("--tocsv", "-C", 
+                        help="save to csv (False)",
+                        default=False, # In any case the default is changed
+                        action="store_true")
+    parser.add_argument("--slow", "-w",
+                        help="Slower RMS computation (False)",
+                        default=True, # In any case the default is changed
+                        action="store_true")
     parser.add_argument("--sshuserhost", "-S", 
                         help="set ssh parameter (login@hostname)", 
                         default='SQLX')
@@ -781,6 +871,8 @@ if __name__ == "__main__":
                 sshuserhost=args.sshuserhost,
                 dbname = args.dbname,
                 blocksize = args.blocksize,
+                tocsv = args.tocsv,
+                slow = args.slow,
                 )
     myPSDs.plot(type=args.type,
                 save=args.output,
