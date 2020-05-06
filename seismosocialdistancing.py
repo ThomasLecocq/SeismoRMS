@@ -413,7 +413,8 @@ def hourmap(data,
             bans = {"2020-03-13":'Groups >100 banned',
                     "2020-03-20":'Groups >5 banned'},
             ax=None,
-            scale = 1e9):
+            scale = 1e9,
+            unit = 'nm'):
     """
     Make a polar plot of rms
 
@@ -425,6 +426,8 @@ def hourmap(data,
     :param ax: use the provided exiting axe if provided.
     :type scale: float.
     :param scale: scale amplitudes (to nm by default).
+    :type unit: string
+    :param unit: units for amplitudes (to nm by default).
     :return: A axe with the plot.
 
     .. rubric:: Basic Usage
@@ -489,7 +492,7 @@ def hourmap(data,
     cb=plt.colorbar(s_m,orientation='horizontal')#,pad=0.07)
     #ticks = ticker.FuncFormatter(lambda x, pos: "{0:g}".format(x*scale))
     #cb.ax.xaxis.set_major_formatter(ticks)
-    cb.ax.set_xlabel("Displacement (nm)")    
+    cb.ax.set_xlabel("Displacement (%s)"%unit)    
     ax.bar(theta[valid], radii[valid], 
            color=s_m.to_rgba(scale*data.values[valid,0]),
            bottom=radii[valid]-1,
@@ -504,11 +507,11 @@ def stack_wday_time(df,scale):
     """Takes a DateTimeIndex'ed DataFrame and returns the unstaked table: hours vs day name"""
     return df.groupby(level=(0,1)).median().unstack(level=-1).T.droplevel(0)[days]*scale
 
-def clock24_plot_commons(ax):
+def clock24_plot_commons(ax,unit='nm'):
     # Set the circumference labels
     ax.set_xticks(np.linspace(0, 2*np.pi, 24, endpoint=False))
     ax.set_xticklabels(["%i h"%i for i in range(24)], fontsize=8)
-    ax.set_yticklabels(["%i nm" % i for i in np.arange(0,100, 10)], fontsize=7)
+    ax.set_yticklabels(["%i %s" %(i,unit) for i in np.arange(0,100, 10)], fontsize=7)
     ax.yaxis.set_tick_params(labelsize=8)
 
     # Make the labels go clockwise
@@ -534,6 +537,7 @@ def plot(displacement_RMS,
                  "2020-03-20":'Groups >5 banned'},
          type = '*',
          scale = 1e9,
+         unit = 'nm',
          time_zone = "Europe/Brussels",
          sitedesc = "",# "in Uccle (Brussels, BE)", in original example
          show = True,
@@ -590,7 +594,8 @@ def plot(displacement_RMS,
         if type in ['*', 'all', 'clockmaps']:
             ax = hourmap(data[main],
                          bans=bans,
-                         scale=scale)
+                         scale=scale,
+                         unit=unit)
             title = 'Seismic Noise for %s - Filter: [%s] Hz' % (channelcode[:]+main[-1],band)
             ax.set_title('Seismic Noise for %s - Filter: [%s] Hz' % (channelcode[:]+main[-1],band))
             if save is not None:
@@ -628,7 +633,7 @@ def plot(displacement_RMS,
             plt.ylim(0,np.nanpercentile(data[main],95)*1.5)
             ticks = ticker.FuncFormatter(lambda x, pos: "{0:g}".format(x*scale))
             plt.gca().yaxis.set_major_formatter(ticks)
-            plt.ylabel("Displacement (nm)")
+            plt.ylabel("Displacement (%s)"%unit)
 
             plt.title('Seismic Noise for %s - Filter: [%s] Hz' % (channelcode[:]+main[-1],
                                                                   band))
@@ -671,7 +676,7 @@ def plot(displacement_RMS,
                     stack_wday_time(postloc,scale).plot(ls="--", ax=ax, legend=False,cmap = cmap)
                 
                 plt.title("Daily Noise Levels in %s" % (channelcode[:]+main[-1]))
-                plt.ylabel("Amplitude (nm)")
+                plt.ylabel("Amplitude (%s)"%unit)
                 plt.xlabel("Hour of day (local time)")
                 plt.grid()
                 plt.xlim(0,23)
@@ -700,7 +705,7 @@ def plot(displacement_RMS,
                 _.plot(ax=ax)#es[0])
     
                 plt.title("Before Lockdown", fontsize=12)
-                clock24_plot_commons(ax)#es[0])
+                clock24_plot_commons(ax,unit=unit)#es[0])
                 ax.set_rmax(np.nanpercentile(data[main],95)*1.5*scale)
     
                 ax = plt.subplot(122, polar=True)#, sharey=ax)
@@ -712,7 +717,7 @@ def plot(displacement_RMS,
                            ls="--")
     
                 plt.title("After Lockdown", fontsize=12)
-                clock24_plot_commons(ax)#es[0])
+                clock24_plot_commons(ax,unit=unit)#es[0])
                 ax.set_rmax(np.nanpercentile(data[main],95)*1.5*scale)
                 
                 suptitle = "Day/Hour Median Noise levels %s\n"
@@ -884,7 +889,8 @@ if __name__ == "__main__":
                 band=args.band,
                 logo=args.logo,
                 bans=args.bans,
-                scale=1e9,
+                scale=1e9, # Still hardcoded 
+                unit='nm', # Idem
                 time_zone=args.time_zone,
                 sitedesc=args.sitedesc,
                 show=args.show,
