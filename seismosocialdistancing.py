@@ -595,7 +595,8 @@ def plot(displacement_RMS,
             ax.set_title('Seismic Noise for %s - Filter: [%s] Hz' % (channelcode[:]+main[-1],band))
             if save is not None:
                 ax.figure.savefig("%s-hourmap.%s"%(basename,format),
-                                  bbox_inches='tight')
+                                  bbox_inches='tight',
+                                  facecolor='w')
             if show:
                 plt.show()
                
@@ -652,7 +653,8 @@ def plot(displacement_RMS,
             #axins.tick_params(left=False, right=True, labelleft=False, labelright=True)
             if save is not None:
                 fig.savefig("%s.%s"%(basename,format),
-                            bbox_inches='tight')
+                            bbox_inches='tight',
+                            facecolor='w')
             if show:
                 plt.show()
         
@@ -665,7 +667,8 @@ def plot(displacement_RMS,
 
             if type in ['*', 'all', 'dailyplots']:
                 ax = stack_wday_time(preloc,scale).plot(figsize=(14,8), cmap = cmap)
-                stack_wday_time(postloc,scale).plot(ls="--", ax=ax, legend=False,cmap = cmap)
+                if len(postloc):
+                    stack_wday_time(postloc,scale).plot(ls="--", ax=ax, legend=False,cmap = cmap)
                 
                 plt.title("Daily Noise Levels in %s" % (channelcode[:]+main[-1]))
                 plt.ylabel("Amplitude (nm)")
@@ -675,7 +678,8 @@ def plot(displacement_RMS,
                 plt.ylim(0,np.nanpercentile(data[main],95)*1.5*scale)
                 if save is not None:
                     ax.figure.savefig("%s-daily.%s"%(basename,format),
-                                      bbox_inches='tight')
+                                      bbox_inches='tight',
+                                      facecolor='w')
                 if show:
                     plt.show()
 
@@ -700,12 +704,12 @@ def plot(displacement_RMS,
                 ax.set_rmax(np.nanpercentile(data[main],95)*1.5*scale)
     
                 ax = plt.subplot(122, polar=True)#, sharey=ax)
-                _ = stack_wday_time(postloc,scale).copy()
-                _.loc[len(_)+1] = _.iloc[0]
-                _.index = radial_hours(len(_))
-    
-                _.plot(ax=ax,#es[0], 
-                       ls="--")
+                if len(postloc):
+                    _ = stack_wday_time(postloc,scale).copy()
+                    _.loc[len(_)+1] = _.iloc[0]
+                    _.index = radial_hours(len(_))
+                    _.plot(ax=ax,#es[0], 
+                           ls="--")
     
                 plt.title("After Lockdown", fontsize=12)
                 clock24_plot_commons(ax)#es[0])
@@ -721,7 +725,8 @@ def plot(displacement_RMS,
                 if save is not None:
                     fig = ax.figure
                     fig.savefig("%s-hourly.%s"%(basename,format),
-                                bbox_inches='tight')
+                                bbox_inches='tight',
+                                facecolor='w')
                 if show:
                     plt.show()
    
