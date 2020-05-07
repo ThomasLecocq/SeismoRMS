@@ -4,6 +4,7 @@ import matplotlib,imp
 # to edit text in Illustrator
 matplotlib.rcParams['pdf.fonttype'] = 42
 
+import tqdm
 import pandas as pd
 import numpy as np
 from obspy import UTCDateTime
@@ -73,6 +74,9 @@ class PSDs(object):
              clientobspy=False,
              steps={'clientpqlx':30,'clientobspy':15},
              sshuserhost='user@hostname',
+             tocsv=False,
+             slow=False,
+             output="DISP",
              **args):
         
         self.displacement_RMS = {}
@@ -120,7 +124,11 @@ class PSDs(object):
                                                 end = UTCDateTime(bf[1]),
                                                 **args)
                                 print('Computing',mseedid,bf)
-                                tmp.dRMS(freqs=freqs)
+                                if slow:
+                                    tmp.dRMS(freqs=freqs)
+                                else:
+                                    tmp.dfRMS(freqs=freqs,output=output)
+
                                 if mseedid not in tmp.displacement_RMS:
                                     print('Missing',mseedid,bf)
                                     continue
@@ -133,6 +141,8 @@ class PSDs(object):
                                                columns=["%.1f-%.1f"%f for f in freqs],
                                                where=['index>=start.datetime and index<=end.datetime'])
                             self.displacement_RMS[mseedid] = tmp
+                            if tocsv:
+                                self.displacement_RMS[mseedid].to_csv("%s%s.csv" % (save,mseedid))
                         else:
                             print('Missing',mseedid,(start.datetime,end.datetime))
         store.close()
@@ -161,7 +171,36 @@ class PSDs(object):
         plot(self.displacement_RMS,
              type='clockmaps',
              **args)
-    
+
+    def dfRMS(self,
+              freqs = [(0.1,1.0),(1.0,20.0),(4.0,14.0),(4.0,20.0)],
+              output="DISP"):
+
+        if not hasattr(self,'displacement_RMS'):
+            self.displacement_RMS = {}
+        displacement_RMS = {}
+        mseedids = list(set([mseedid for mseedid,time in self.times])) 
+        for mseedid in mseedids:
+            ind_times = []
+            psd_values = []
+            period_bin_centers = []
+            for mseedid,time in tqdm.tqdm(self.times):
+                if time in self.displacement_RMS[mseedid].index:
+                    continue
+                period_bin_centers = np.sort(np.unique(self.per[(mseedid,time)]))
+                ind_times += [time]
+                psd_values += [self.psd[(mseedid,time)][:len(period_bin_centers)]]
+            ind_times = pd.DatetimeIndex(ind_times)
+            data = pd.DataFrame(psd_values, 
+                                index=ind_times, 
+                                columns=1.0/np.sort(period_bin_centers))
+            data = data.sort_index(axis=1)
+            data = df_rms(data, freqs, output=output)
+            if mseedid in self.displacement_RMS:
+                self.displacement_RMS[mseedid].append(data)
+            else:
+                self.displacement_RMS[mseedid] = df_rms(data, freqs, output=output)
+
     def dRMS(self,
              freqs=[(0.1,1.0),
                     (1.0,20.0),
@@ -205,6 +244,39 @@ class PSDs(object):
             index = pd.DatetimeIndex(times[mseedid])
             self.displacement_RMS[mseedid] = pd.DataFrame(displacement_RMS[mseedid],index=index)
 
+def dfrms(a):
+    return np.sqrt(np.trapz(a.values, a.index))
+
+def df_rms(d, freqs, output="VEL"):
+    d = d.dropna(axis=1, how='all')
+    RMS = {}
+    for fmin, fmax in freqs:
+        
+        ix = np.where((d.columns>=fmin) & (d.columns<=fmax))[0]
+        spec = d.iloc[:,ix]
+        f = d.columns[ix]
+        
+        w2f = (2.0 * np.pi * f)
+
+        # The acceleration power spectrum (dB to Power! = divide by 10 and not 20!)
+        amp = 10.0**(spec/10.) 
+        if output == "ACC":
+            RMS["%.1f-%.1f"%(fmin, fmax)] = amp.apply(dfrms, axis=1)
+            continue
+        
+        # velocity power spectrum (divide by omega**2)
+        vamp = amp / w2f**2
+        if output == "VEL":
+            RMS["%.1f-%.1f"%(fmin, fmax)] = vamp.apply(dfrms, axis=1)
+            continue
+                
+        # displacement power spectrum (divide by omega**2)
+        damp = vamp / w2f**2
+       
+        RMS["%.1f-%.1f"%(fmin, fmax)] = damp.apply(dfrms, axis=1)
+
+    return pd.DataFrame(RMS, index=d.index)#.tz_localize("UTC")#.dropna()
+
 def pqlx2psds(sshuserhost,
               network = 'CH',
               station = 'SGEV',
@@ -246,6 +318,7 @@ def pqlx2psds(sshuserhost,
                              freq="30min")
     for date1 in datelist:
         date2 = date1+pd.Timedelta(minutes=30)
+        date3 = date1+pd.Timedelta(minutes=15)
         if date2 > end.datetime:
             break
         for n in network.split(','):
@@ -264,7 +337,8 @@ def pqlx2psds(sshuserhost,
                         command += ' %s'%date2.strftime("%Y-%m-%d")
                         command += ' %s'%date1.strftime('%X')
                         command += ' %s'%date2.strftime('%X')
-                        command += ' P | sed "s/$/\t%s\tmyprecious/"\n'%(mseedid)
+                        addons = (mseedid,date3.strftime("%Y-%m-%d"),date3.strftime("%X"))
+                        command += ' P | sed "s/$/\t%s\t%s\t%s\tmyprecious/"\n'%addons
                         commands += [command]
  
     for c in range(0,len(commands),blocksize):
@@ -290,7 +364,7 @@ def pqlx2psds(sshuserhost,
                 except:
                     print(line.strip(),'unexpected line')
                     continue
-                mseedid = data[-1]
+                mseedid = data[-3]
                 time = UTCDateTime('%s %s'%(data[0],data[1])).datetime
                 self.add(time,mseedid)
                 self.count[(mseedid,time)] += [1]
@@ -339,7 +413,8 @@ def hourmap(data,
             bans = {"2020-03-13":'Groups >100 banned',
                     "2020-03-20":'Groups >5 banned'},
             ax=None,
-            scale = 1e9):
+            scale = 1e9,
+            unit = 'nm'):
     """
     Make a polar plot of rms
 
@@ -351,6 +426,8 @@ def hourmap(data,
     :param ax: use the provided exiting axe if provided.
     :type scale: float.
     :param scale: scale amplitudes (to nm by default).
+    :type unit: string
+    :param unit: units for amplitudes (to nm by default).
     :return: A axe with the plot.
 
     .. rubric:: Basic Usage
@@ -415,7 +492,7 @@ def hourmap(data,
     cb=plt.colorbar(s_m,orientation='horizontal')#,pad=0.07)
     #ticks = ticker.FuncFormatter(lambda x, pos: "{0:g}".format(x*scale))
     #cb.ax.xaxis.set_major_formatter(ticks)
-    cb.ax.set_xlabel("Displacement (nm)")    
+    cb.ax.set_xlabel("Displacement (%s)"%unit)    
     ax.bar(theta[valid], radii[valid], 
            color=s_m.to_rgba(scale*data.values[valid,0]),
            bottom=radii[valid]-1,
@@ -426,15 +503,15 @@ def hourmap(data,
 
 days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday','Saturday','Sunday']
 # Just a bunch of helper functions
-def stack_wday_time(df):
+def stack_wday_time(df,scale):
     """Takes a DateTimeIndex'ed DataFrame and returns the unstaked table: hours vs day name"""
-    return df.groupby(level=(0,1)).median().unstack(level=-1).T.droplevel(0)[days]*1e9
+    return df.groupby(level=(0,1)).median().unstack(level=-1).T.droplevel(0)[days]*scale
 
-def clock24_plot_commons(ax):
+def clock24_plot_commons(ax,unit='nm'):
     # Set the circumference labels
     ax.set_xticks(np.linspace(0, 2*np.pi, 24, endpoint=False))
     ax.set_xticklabels(["%i h"%i for i in range(24)], fontsize=8)
-    ax.set_yticklabels(["%i nm" % i for i in np.arange(0,100, 10)], fontsize=7)
+    ax.set_yticklabels(["%i %s" %(i,unit) for i in np.arange(0,100, 10)], fontsize=7)
     ax.yaxis.set_tick_params(labelsize=8)
 
     # Make the labels go clockwise
@@ -456,10 +533,11 @@ def localize_tz_and_reindex(df, freq="15Min", time_zone = "Europe/Brussels"):
 def plot(displacement_RMS,
          band = "4.0-14.0",
          logo = 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/44/Logo_SED_2014.png/220px-Logo_SED_2014.png',
-         bans = {"2020-03-20":'Groups >5 banned',
-                 "2020-03-13":'Groups >100 banned'},
+         bans = {"2020-03-13":'Groups >100 banned',
+                 "2020-03-20":'Groups >5 banned'},
          type = '*',
          scale = 1e9,
+         unit = 'nm',
          time_zone = "Europe/Brussels",
          sitedesc = "",# "in Uccle (Brussels, BE)", in original example
          show = True,
@@ -516,12 +594,14 @@ def plot(displacement_RMS,
         if type in ['*', 'all', 'clockmaps']:
             ax = hourmap(data[main],
                          bans=bans,
-                         scale=scale)
+                         scale=scale,
+                         unit=unit)
             title = 'Seismic Noise for %s - Filter: [%s] Hz' % (channelcode[:]+main[-1],band)
             ax.set_title('Seismic Noise for %s - Filter: [%s] Hz' % (channelcode[:]+main[-1],band))
             if save is not None:
                 ax.figure.savefig("%s-hourmap.%s"%(basename,format),
-                                  bbox_inches='tight')
+                                  bbox_inches='tight',
+                                  facecolor='w')
             if show:
                 plt.show()
                
@@ -553,7 +633,7 @@ def plot(displacement_RMS,
             plt.ylim(0,np.nanpercentile(data[main],95)*1.5)
             ticks = ticker.FuncFormatter(lambda x, pos: "{0:g}".format(x*scale))
             plt.gca().yaxis.set_major_formatter(ticks)
-            plt.ylabel("Displacement (nm)")
+            plt.ylabel("Displacement (%s)"%unit)
 
             plt.title('Seismic Noise for %s - Filter: [%s] Hz' % (channelcode[:]+main[-1],
                                                                   band))
@@ -578,62 +658,80 @@ def plot(displacement_RMS,
             #axins.tick_params(left=False, right=True, labelleft=False, labelright=True)
             if save is not None:
                 fig.savefig("%s.%s"%(basename,format),
-                            bbox_inches='tight')
+                            bbox_inches='tight',
+                            facecolor='w')
             if show:
                 plt.show()
         
         if type in ['*', 'all', 'clockplots', 'dailyplots']:
-            preloc = data[main].loc[:list(bans.keys())[0]]
+            preloc = data[main].loc[:max(list(bans.keys()))]
             preloc = preloc.set_index([preloc.index.day_name(), preloc.index.hour+preloc.index.minute/60.])
-            postloc = data[main].loc[list(bans.keys())[0]:]
+            postloc = data[main].loc[max(list(bans.keys())):]
             postloc = postloc.set_index([postloc.index.day_name(), postloc.index.hour+postloc.index.minute/60.])
             cmap = plt.get_cmap("tab20")
 
             if type in ['*', 'all', 'dailyplots']:
-                ax = stack_wday_time(preloc).plot(figsize=(14,8), cmap = cmap)
-                stack_wday_time(postloc).plot(ls="--", ax=ax, legend=False,cmap = cmap)
+                ax = stack_wday_time(preloc,scale).plot(figsize=(14,8), cmap = cmap)
+                if len(postloc):
+                    stack_wday_time(postloc,scale).plot(ls="--", ax=ax, legend=False,cmap = cmap)
                 
                 plt.title("Daily Noise Levels in %s" % (channelcode[:]+main[-1]))
-                plt.ylabel("Amplitude (nm)")
+                plt.ylabel("Amplitude (%s)"%unit)
                 plt.xlabel("Hour of day (local time)")
                 plt.grid()
                 plt.xlim(0,23)
+                plt.ylim(0,np.nanpercentile(data[main],95)*1.5*scale)
                 if save is not None:
                     ax.figure.savefig("%s-daily.%s"%(basename,format),
-                                      bbox_inches='tight')
+                                      bbox_inches='tight',
+                                      facecolor='w')
                 if show:
                     plt.show()
 
             if type in ['*', 'all', 'clockplots']:
                 # Polar/clock Plot:
-                _ = stack_wday_time(preloc).copy()
+                _ = stack_wday_time(preloc,scale).copy()
                 _.loc[len(_)+1] = _.iloc[0]
                 _.index = radial_hours(len(_))
-    
+                
+                #subplot_kw = {'polar':True}
+                #opts={#'sharey':True,
+                #      'figsize':(12,6),
+                #      'subplot_kw':subplot_kw}
+                #fig, axes  = plt.subplots(1,2,**opts)
+
                 plt.figure(figsize=(12,6))
                 ax = plt.subplot(121, polar=True)
-                _.plot(ax=ax)
+                _.plot(ax=ax)#es[0])
     
                 plt.title("Before Lockdown", fontsize=12)
-                clock24_plot_commons(ax)
+                clock24_plot_commons(ax,unit=unit)#es[0])
+                ax.set_rmax(np.nanpercentile(data[main],95)*1.5*scale)
     
-                ax = plt.subplot(122, polar=True, sharey=ax)
-                _ = stack_wday_time(postloc).copy()
-                _.loc[len(_)+1] = _.iloc[0]
-                _.index = radial_hours(len(_))
-    
-                _.plot(ax=ax, ls="--")
+                ax = plt.subplot(122, polar=True)#, sharey=ax)
+                if len(postloc):
+                    _ = stack_wday_time(postloc,scale).copy()
+                    _.loc[len(_)+1] = _.iloc[0]
+                    _.index = radial_hours(len(_))
+                    _.plot(ax=ax,#es[0], 
+                           ls="--")
     
                 plt.title("After Lockdown", fontsize=12)
-                clock24_plot_commons(ax)
-    
-                plt.suptitle("Day/Hour Median Noise levels %s\nStation %s - [%s] Hz" % (sitedesc,
-                                                                                        channelcode[:]+main[-1],
-                                                                                        band), fontsize=16)
+                clock24_plot_commons(ax,unit=unit)#es[0])
+                ax.set_rmax(np.nanpercentile(data[main],95)*1.5*scale)
+                
+                suptitle = "Day/Hour Median Noise levels %s\n"
+                suptitle += "Station %s - [%s] Hz"
+                plt.suptitle(suptitle % (sitedesc,
+                                         channelcode[:]+main[-1],
+                                         band),
+                             fontsize=16)
                 plt.subplots_adjust(top=0.80)
                 if save is not None:
-                    ax.figure.savefig("%s-hourly.%s"%(basename,format),
-                                      bbox_inches='tight')
+                    fig = ax.figure
+                    fig.savefig("%s-hourly.%s"%(basename,format),
+                                bbox_inches='tight',
+                                facecolor='w')
                 if show:
                     plt.show()
    
@@ -650,11 +748,19 @@ if __name__ == "__main__":
                 k,v = kv.split("=")
                 my_dict[k] = v
             setattr(namespace, self.dest, my_dict)
+    def listoftup(s):
+        try:
+            lt = [ tuple([ float(f) for f in l.split('-')]) for l in s.split(',') ] 
+            return lt
+        except:
+            raise 
     # Initiate the parser
     parser = argparse.ArgumentParser()
     # Add long and short argument
     parser.add_argument("--freqs", "-f", 
-                        help="set freqs ([(4.0,14.0)])", 
+                        help="set freqs ('4.0-14.0')", 
+                        metavar="fmin1-fmax2,fmin2-fmax2,...",
+                        type=listoftup,
                         default=[(4.0,14.0)])
     parser.add_argument("--network", "-n", 
                         help="set network ('AA')", 
@@ -716,6 +822,14 @@ if __name__ == "__main__":
     parser.add_argument("--pqlx", "-p", 
                         help="set PQLX mode", 
                         action="store_true")
+    parser.add_argument("--tocsv", "-C", 
+                        help="save to csv (False)",
+                        default=False, # In any case the default is changed
+                        action="store_true")
+    parser.add_argument("--slow", "-w",
+                        help="Slower RMS computation (False)",
+                        default=True, # In any case the default is changed
+                        action="store_true")
     parser.add_argument("--sshuserhost", "-S", 
                         help="set ssh parameter (login@hostname)", 
                         default='SQLX')
@@ -767,13 +881,16 @@ if __name__ == "__main__":
                 sshuserhost=args.sshuserhost,
                 dbname = args.dbname,
                 blocksize = args.blocksize,
+                tocsv = args.tocsv,
+                slow = args.slow,
                 )
     myPSDs.plot(type=args.type,
                 save=args.output,
                 band=args.band,
                 logo=args.logo,
                 bans=args.bans,
-                scale=1e9,
+                scale=1e9, # Still hardcoded 
+                unit='nm', # Idem
                 time_zone=args.time_zone,
                 sitedesc=args.sitedesc,
                 show=args.show,
