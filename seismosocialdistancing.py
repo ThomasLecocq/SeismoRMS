@@ -172,6 +172,12 @@ class PSDs(object):
              type='clockmaps',
              **args)
 
+    def gridmap(self,
+                 **args):
+        plot(self.displacement_RMS,
+             type='gridmaps',
+             **args)
+
     def dfRMS(self,
               freqs = [(0.1,1.0),(1.0,20.0),(4.0,14.0),(4.0,20.0)],
               output="DISP"):
@@ -409,6 +415,18 @@ def sitemap(mseedid,
                      verbose= True)
     return ax
 
+def pivot_for_hourmap(data, columns="angles"):
+    band = data.columns[0]
+    data["day"] = [d.year * 365 + d.dayofyear for d in data.index]
+    data["time"] = [d.hour + d.minute / 60. for d in data.index]
+
+    data = data.pivot(index="day", columns="time", values=band)
+    data.index -= data.index[0]
+    data.index = data.index.astype(float)
+    if columns == "angles":
+        data.columns = 2 * np.pi * data.columns / 24.0
+    return data
+
 def hourmap(data,
             bans = {"2020-03-13":'Groups >100 banned',
                     "2020-03-20":'Groups >5 banned'},
@@ -436,31 +454,42 @@ def hourmap(data,
 
     >>> ax = hourmap(data[mseedid])
     """
-    width = data.index[1]-data.index[0]
-    width = np.pi * 2 / 24 / 60 /60 * width.seconds 
-    theta = np.asarray([(d.hour/24+d.minute/60/24)*np.pi*2-width/2 for d in data.index])
-    radii = np.asarray([int(d.to_julian_date()+0.5) for d in data.index])
-    radii = radii-min(radii)
-    norm = colors.Normalize(vmin=scale*np.nanpercentile(data,1),
-                            vmax=scale*np.nanpercentile(data,95))
-    c_m = plt.cm.viridis
-    s_m = plt.cm.ScalarMappable(cmap=c_m, 
-                                norm=norm)
-    s_m.set_array([])
-    valid = np.where(np.isfinite(data))[0][::-1]
-    
+    origin_time = data.index[0]
+    origin_text = data.index[0].strftime("%Y-%m-%d")
+
+    data *= scale
+
+    vmin, vmax = data.quantile(0.01), data.quantile(0.95)
+    data = pivot_for_hourmap(data)
+
     if ax is None:
         ax=plt.figure(figsize=(7,9)).add_subplot(111, projection='polar')
+
     ax.grid(color='w',
-            #path_effects=[pe.withStroke(linewidth=2,foreground='w')]
+            # path_effects=[pe.withStroke(linewidth=2,foreground='w')]
             )
-    ax.set_xticks(np.linspace(0,np.pi*2*23/24,24))
-    ax.set_xticklabels(['%d h'%h for h in range(24)])
+    ax.set_xticks(np.linspace(0, np.pi * 2 * 23 / 24, 24))
+    ax.set_xticklabels(['%d h' % h for h in range(24)])
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
-    ax.set_rmax(max(radii))
+
+    X = np.append(data.columns, 2 * np.pi)
+    Y = np.append(data.index, data.index[-1] + 1)
+
+    plt.pcolormesh(X, Y, data, vmax=vmax, vmin=vmin,
+                   rasterized=True, antialiased=True)
+    cb = plt.colorbar(orientation='horizontal', shrink=0.8)
+    cb.ax.set_xlabel("Displacement (%s)" % unit)
+    ax.set_rorigin(max(Y) / -4)
+    ax.text(np.pi, max(Y) / -4,
+            origin_text,
+            ha='center', va='center')
+    ax.set_xlabel(origin_text)
+    ax.grid(color='w',)
+    ax.set_rmax(max(Y))
+
     if bans is not None:
-        rticks = [((UTCDateTime(ban).datetime - data.index.min().to_pydatetime()).days)*2 for iban,ban in enumerate(bans.keys())]
+        rticks = [((UTCDateTime(ban).datetime - origin_time.to_pydatetime()).days) for iban, ban in enumerate(bans.keys())]
         xticks = [(UTCDateTime(ban).datetime.hour/24+UTCDateTime(ban).datetime.minute/60/24)*np.pi*2 for iban,ban in enumerate(bans.keys())]
         labels = [bans[iban] for iban in bans.keys()]
         xticks = [xticks[i] for i,d in enumerate(rticks) if d>0]
@@ -478,28 +507,91 @@ def hourmap(data,
                                                 foreground='w'),
                                   pe.withStroke(linewidth=3,
                                                 foreground='k')])
-    ax.set_yticklabels([])
-    ax.set_rorigin(max(radii[valid])/-2)
-    ax.text(np.pi,max(radii[valid])/-2,
-            data.index[0].strftime("%Y-%m-%d"),
-            ha='center',va='center')    
-    ax.set_xlabel(data.index[-1].strftime("%Y-%m-%d"))
+
     plt.legend(loc='lower left',
                bbox_to_anchor= (0.0, -0.2), 
                ncol=2,
                borderaxespad=0, 
                frameon=False)
-    cb=plt.colorbar(s_m,orientation='horizontal')#,pad=0.07)
-    #ticks = ticker.FuncFormatter(lambda x, pos: "{0:g}".format(x*scale))
-    #cb.ax.xaxis.set_major_formatter(ticks)
-    cb.ax.set_xlabel("Displacement (%s)"%unit)    
-    ax.bar(theta[valid], radii[valid], 
-           color=s_m.to_rgba(scale*data.values[valid,0]),
-           bottom=radii[valid]-1,
-           width=width)
-    
+
     return ax
 
+def gridmap(data,
+            bans = {"2020-03-13":'Groups >100 banned',
+                    "2020-03-20":'Groups >5 banned'},
+            ax=None,
+            scale = 1e9,
+            unit = 'nm'):
+    """
+    Make a polar plot of rms
+
+    :type data: dataframe.
+    :param data: the rms.
+    :type bans: dict.
+    :param bans: some annotation, keys are date strings, fields are text desc strings.
+    :type ax: axe.
+    :param ax: use the provided exiting axe if provided.
+    :type scale: float.
+    :param scale: scale amplitudes (to nm by default).
+    :type unit: string
+    :param unit: units for amplitudes (to nm by default).
+    :return: A axe with the plot.
+
+    .. rubric:: Basic Usage
+
+    You may omit bans, ax and scale parameters.
+
+    >>> ax = gridmap(data[mseedid])
+    """
+    origin_time = data.index[0]
+    origin_text = data.index[0].strftime("%Y-%m-%d")
+
+    data *= scale
+
+    vmin, vmax = data.quantile(0.01), data.quantile(0.95)
+    days = pd.DatetimeIndex(np.unique(data.index.strftime("%Y-%m-%d")))
+    data = pivot_for_hourmap(data, columns='hours')
+
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(16, 5))
+
+    X = pd.date_range(origin_text, periods=len(data) + 1).to_pydatetime()
+    Y = np.append(data.columns, 24)
+
+    plt.pcolormesh(X, Y, data.T, vmax=vmax, vmin=vmin,
+                   rasterized=True, antialiased=True)
+    plt.colorbar(shrink=0.7, pad=0.01).set_label("Displacement (%s)" % unit)
+    ax.set_xticks(pd.date_range(X[0], X[-1], freq="W-MON").to_pydatetime())
+    ax.set_yticks(np.arange(25))
+    ax.set_yticklabels(['%d h' % h for h in range(25)])
+
+    # fig.autofmt_xdate()
+    plt.grid(True, which='both', c="k")
+    plt.tight_layout()
+
+    if bans is not None:
+        yticks = [UTCDateTime(ban).hour + UTCDateTime(ban).minute/60. for ban in bans]
+        xticks = [UTCDateTime(ban[:11]).datetime for ban in bans]
+        labels = [bans[iban] for iban in bans.keys()]
+        for x,y,l,c in zip(xticks,
+                           yticks,
+                           labels,
+                           range(len(labels))):
+            ax.plot(x,y,'o',
+                    label='\n'.join(wrapper.wrap(l)),
+                    color='C%d'%c,
+                    path_effects=[pe.withStroke(linewidth=5,
+                                                foreground='w'),
+                                  pe.withStroke(linewidth=3,
+                                                foreground='k')])
+
+    plt.legend(loc='lower left',
+               bbox_to_anchor= (0.0, -0.2),
+               ncol=2,
+               borderaxespad=0,
+               frameon=False)
+
+    return ax
 
 days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday','Saturday','Sunday']
 # Just a bunch of helper functions
@@ -511,8 +603,9 @@ def clock24_plot_commons(ax,unit='nm'):
     # Set the circumference labels
     ax.set_xticks(np.linspace(0, 2*np.pi, 24, endpoint=False))
     ax.set_xticklabels(["%i h"%i for i in range(24)], fontsize=8)
-    ax.set_yticklabels(["%i %s" %(i,unit) for i in np.arange(0,100, 10)], fontsize=7)
+    ax.set_yticklabels(["%.2g %s" %(i,unit) for i in ax.get_yticks()], fontsize=7)
     ax.yaxis.set_tick_params(labelsize=8)
+    ax.set_rlabel_position(0)
 
     # Make the labels go clockwise
     ax.set_theta_direction(-1)
@@ -604,8 +697,23 @@ def plot(displacement_RMS,
                                   facecolor='w')
             if show:
                 plt.show()
-               
-            
+
+        if type in ['*', 'all', 'gridmap']:
+            ax = gridmap(data[main],
+                         bans=bans,
+                         scale=scale,
+                         unit=unit)
+            title = 'Seismic Noise for %s - Filter: [%s] Hz' % (
+            channelcode[:] + main[-1], band)
+            ax.set_title('Seismic Noise for %s - Filter: [%s] Hz' % (
+            channelcode[:] + main[-1], band))
+            if save is not None:
+                ax.figure.savefig("%s-gridmap.%s" % (basename, format),
+                                  bbox_inches='tight',
+                                  facecolor='w')
+            if show:
+                plt.show()
+
         if type in ['*', 'all', 'timeseries']:
             fig = plt.figure(figsize=(12,6))
             if logo is not None:
@@ -707,8 +815,8 @@ def plot(displacement_RMS,
                 plt.title("Before Lockdown", fontsize=12)
                 clock24_plot_commons(ax,unit=unit)#es[0])
                 ax.set_rmax(np.nanpercentile(data[main],95)*1.5*scale)
-    
-                ax = plt.subplot(122, polar=True)#, sharey=ax)
+                ax.set_rmin(0)
+                ax = plt.subplot(122, polar=True, sharey=ax)
                 if len(postloc):
                     _ = stack_wday_time(postloc,scale).copy()
                     _.loc[len(_)+1] = _.iloc[0]
@@ -718,7 +826,7 @@ def plot(displacement_RMS,
     
                 plt.title("After Lockdown", fontsize=12)
                 clock24_plot_commons(ax,unit=unit)#es[0])
-                ax.set_rmax(np.nanpercentile(data[main],95)*1.5*scale)
+                # ax.set_rmax(np.nanpercentile(data[main],95)*1.5*scale)
                 
                 suptitle = "Day/Hour Median Noise levels %s\n"
                 suptitle += "Station %s - [%s] Hz"
@@ -784,7 +892,7 @@ if __name__ == "__main__":
                         default=0)
     # Arguments for the plots
     parser.add_argument("--type", "-t", 
-                        help="set plot type ('*', 'timeseries', 'clockplots', 'clockmaps')", 
+                        help="set plot type ('*', 'timeseries', 'clockplots', 'clockmaps', 'gridmaps')",
                         default='timeseries')
     parser.add_argument("--output", "-o", 
                         help="save plot (can provide a path)", 
