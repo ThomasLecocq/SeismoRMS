@@ -456,7 +456,7 @@ def hourmap(data,
     """
     origin_time = data.index[0]
     origin_text = data.index[0].strftime("%Y-%m-%d")
-
+    data = data.copy()
     data *= scale
 
     vmin, vmax = data.quantile(0.01), data.quantile(0.95)
@@ -545,7 +545,7 @@ def gridmap(data,
     """
     origin_time = data.index[0]
     origin_text = data.index[0].strftime("%Y-%m-%d")
-
+    data = data.copy()
     data *= scale
 
     vmin, vmax = data.quantile(0.01), data.quantile(0.95)
@@ -590,7 +590,7 @@ def gridmap(data,
                ncol=2,
                borderaxespad=0,
                frameon=False)
-
+    plt.gcf().autofmt_xdate()
     return ax
 
 days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday','Saturday','Sunday']
@@ -674,7 +674,7 @@ def plot(displacement_RMS,
                               channelcode[:]+main[-1],
                               band)
 
-        if type in ['*', 'all', 'sitemaps']:    
+        if type in ['*', 'all', 'sitemaps']:
             ax=sitemap(channelcode[:]+main[-1],
                        data_provider=data_provider,
                        self=self)
@@ -698,7 +698,7 @@ def plot(displacement_RMS,
             if show:
                 plt.show()
 
-        if type in ['*', 'all', 'gridmap']:
+        if type in ['*', 'all', 'gridmaps']:
             ax = gridmap(data[main],
                          bans=bans,
                          scale=scale,
