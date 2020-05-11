@@ -2,6 +2,8 @@
 
 *an example simple tutorial for getting seismic data, computing the power spectral densities, extracting the RMS and plotting*
 
+[![DOI](https://zenodo.org/badge/doi/10.5281/zenodo.3820046.svg)](http://dx.doi.org/10.5281/zenodo.3820046)
+
 Required:
 
 - python
